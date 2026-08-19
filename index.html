@@ -462,17 +462,40 @@
   .edit-actions .edit-add { background: var(--grad-accent); color: #fff; border-color: transparent; font-weight: 600; box-shadow: var(--shadow-glow), inset 0 1px 0 rgba(255,255,255,.28); padding: 4px 6px; }
   .edit-actions .edit-add:hover { background: var(--grad-accent-hover); border-color: transparent; }
 
+  @media (max-width: 640px) {
+    /* 顶部导航：缩 padding + 字号，brand 收窄 */
+    .app-nav { padding: 6px 8px; gap: 4px; flex-wrap: wrap; }
+    .app-nav .brand { margin-right: 4px; font-size: 13px; }
+    .app-nav .brand .brand-text { display: none; }
+    .app-nav .nav-item { padding: 5px 9px; font-size: 12.5px; }
+    .app-nav .nav-sync-slot { margin-left: auto; }
+    /* 工具栏：每个 group 单独成行，去掉中间分隔线 */
+    .toolbar { padding: 8px 10px; gap: 4px; }
+    .toolbar .group { width: 100%; flex-wrap: wrap; gap: 4px; padding: 4px 0; }
+    .toolbar .group + .group { border-left: none; border-top: 1px solid var(--border); margin-left: 0; padding-left: 0; padding-top: 8px; }
+    .toolbar .group .lbl { font-size: 11px; margin-right: 2px; }
+    /* 按钮更紧凑 */
+    .toolbar button { padding: 6px 10px; font-size: 12.5px; }
+    /* 标题缩小 */
+    header h1 { font-size: 19px; }
+    header .sub { font-size: 12.5px; }
+  }
   @media (max-width: 540px) {
     .row { grid-template-columns: 22px 1fr; }
     .row .actions { grid-column: 1 / -1; justify-content: flex-start; }
     #vocab-panel { width: 88vw; right: -92vw; }
+    /* 极窄屏：brand 完全隐藏文字（只留 🎧 图标） */
+    .app-nav .brand { margin-right: 0; }
+    .app-nav .brand .brand-text { display: none; }
+    /* 进度条/操作区更紧凑 */
+    .progress { font-size: 12px; }
   }
 </style>
 </head>
 <body>
 <div class="wrap">
   <nav class="app-nav">
-    <span class="brand">🎧 Shadowing English</span>
+    <span class="brand">🎧 <span class="brand-text">Shadowing English</span></span>
     <a class="nav-item active" href="index.html">📚 生成材料</a>
     <a class="nav-item" href="vocab.html">📖 生词本</a>
     <a class="nav-item" href="library.html">📚 材料库</a>
