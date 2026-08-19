@@ -1,0 +1,18 @@
+# Cloudflare Pages 部署配置：正确 MIME + 缓存策略
+# sw.js 永不缓存（保证更新立即生效）
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# sync.js 短缓存（方便改 key 后立即生效）
+/sync.js
+  Cache-Control: no-cache
+
+# 静态资源（图标/音频）长缓存
+/*.png
+  Cache-Control: public, max-age=86400
+/*.mp3
+  Cache-Control: public, max-age=604800
+
+# manifest 不缓存（保证 PWA 更新及时）
+/manifest.json
+  Cache-Control: no-cache

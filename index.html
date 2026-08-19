@@ -1,0 +1,2816 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>逐句跟读 · Shadowing English</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#3b82f6" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="跟读" />
+<style>
+  :root {
+    /* —— Modern Card 白底设计系统（圆角 · 阴影 · 渐变 · App 感）—— */
+    --bg: #f2f4f8;
+    --bg-warm: #f7f8fb;
+    --panel: #ffffff;           /* 卡片 / 行：纯白 */
+    --panel-top: #ffffff;
+    --panel-2: #f9fafc;        /* 上浮层（近白灰） */
+    --border: rgba(15,23,42,0.08);
+    --border-strong: rgba(15,23,42,0.14);
+    --border-hi: rgba(15,23,42,0.22);
+    --track: rgba(100,116,139,0.16);     /* 进度条底槽 */
+    --text: #1e293b;            /* 主文字（深石板灰） */
+    --text-soft: #334155;
+    --muted: #64748b;           /* 次文字 */
+    --muted-2: #94a3b8;
+    --accent: #3b82f6;          /* 主蓝 */
+    --accent-2: #6366f1;        /* 渐变收尾（靛紫） */
+    --accent-hover: #2563eb;
+    --accent-soft: rgba(59,130,246,0.10);
+    --grad-accent: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+    --grad-accent-hover: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+    --grad-surface: linear-gradient(180deg, #fff 0%, #fbfcfe 100%);
+    --grad-surface-2: linear-gradient(180deg, #f8f9fc 0%, #f1f3f7 100%);
+    --current: rgba(59,130,246,0.07);      /* 正在播放的行底色 */
+    --current-border: #3b82f6;
+    --current-grad: linear-gradient(90deg, rgba(59,130,246,0.11), rgba(99,102,241,0.05));
+    --hard: #f59e0b;            /* 难句 / 生词标记（琥珀） */
+    --vocab: #eab308;           /* 生词高亮下划线 */
+    --rec: #ef4444;             /* 录音（红） */
+    --ok: #22c55e;              /* 完成 / 进度（绿） */
+    --radius: 16px;             /* 大圆角：卡片、行、面板 */
+    --radius-sm: 11px;          /* 按钮、小元件圆角 */
+    --radius-pill: 999px;       /* 药丸形 */
+    --ease: cubic-bezier(.32,.72,0,1);
+    /* 分层阴影（elevation）— 浅色系用更柔和的阴影 */
+    --shadow-1: 0 1px 2px rgba(15,23,42,0.06), 0 1px 4px rgba(15,23,42,0.04);
+    --shadow-2: 0 4px 12px rgba(15,23,42,0.09), 0 2px 6px rgba(15,23,42,0.06);
+    --shadow-3: 0 12px 32px rgba(15,23,42,0.14), 0 4px 12px rgba(15,23,42,0.08);
+    --shadow-glow: 0 6px 24px rgba(59,130,246,0.28);
+    --shadow-inset: inset 0 -1px 0 rgba(15,23,42,0.04);
+    --shadow: var(--shadow-1);
+    --shadow-lg: var(--shadow-3);
+  }
+  html { color-scheme: light; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    background:
+      radial-gradient(800px 480px at 10% -8%, rgba(59,130,246,0.08), transparent 55%),
+      radial-gradient(760px 500px at 95% 4%, rgba(99,102,241,0.07), transparent 55%),
+      linear-gradient(175deg, #f0f2f6 0%, #f5f7fa 40%, #eef1f5 100%);
+    background-attachment: fixed;
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    accent-color: var(--accent);
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 20px 16px 64px; }
+
+  /* —— 顶部导航（与生词本/材料库页面统一） —— */
+  .app-nav {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.78);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    border-radius: var(--radius); padding: 8px 12px;
+    margin: 0 0 12px;
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
+  }
+  .app-nav .brand { font-weight: 700; font-size: 15px; margin-right: 14px; display: flex; align-items: center; gap: 6px; }
+  .app-nav .nav-item {
+    text-decoration: none; color: var(--muted); font-size: 13.5px; font-weight: 500;
+    padding: 6px 13px; border-radius: 10px; transition: background .18s var(--ease), color .18s var(--ease);
+    white-space: nowrap;
+  }
+  .app-nav .nav-item:hover { background: var(--accent-soft); color: var(--accent); }
+  .app-nav .nav-item.active { background: var(--grad-accent); color: #fff; box-shadow: var(--shadow-glow); }
+
+  header h1 { font-size: 22px; margin: 0 0 4px; }
+  header .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    background: rgba(255,255,255,0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius); padding: 10px 14px;
+    box-shadow: var(--shadow-2), var(--shadow-inset);
+    position: sticky; top: 8px; z-index: 10;
+  }
+  .group { display: flex; gap: 5px; align-items: center; }
+  .group + .group { border-left: 1px solid var(--border); padding-left: 10px; margin-left: 2px; }
+  .group .lbl { font-size: 12px; color: var(--muted); margin-right: 3px; font-weight: 500; }
+
+  button {
+    font: inherit; cursor: pointer; border: 1px solid var(--border-strong);
+    background: var(--grad-surface); color: var(--text-soft);
+    border-radius: var(--radius-sm);
+    padding: 7px 13px; line-height: 1.35;
+    font-size: 13.5px; font-weight: 500;
+    box-shadow: var(--shadow-1), var(--shadow-inset);
+    transition: all .18s var(--ease);
+    white-space: nowrap;
+  }
+  button:hover { background: #fff; color: var(--text); border-color: var(--border-hi); transform: translateY(-1px); box-shadow: var(--shadow-2); }
+  button:active { transform: scale(.97) translateY(0); }
+  button[aria-pressed="true"] { background: var(--accent-soft); border-color: rgba(59,130,246,.30); color: var(--accent); font-weight: 600; box-shadow: none; }
+  button:focus-visible, .row:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .btn-primary { background: var(--grad-accent); color: #fff; border-color: transparent; box-shadow: var(--shadow-glow); font-weight: 600; }
+  .btn-primary:hover { background: var(--grad-accent-hover); border-color: transparent; transform: translateY(-1px); box-shadow: 0 8px 28px rgba(59,130,246,.36); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+  .btn-ghost { border-color: transparent; background: transparent; color: var(--accent); box-shadow: none; font-weight: 500; }
+  .btn-ghost:hover { background: var(--accent-soft); box-shadow: none; transform: none; }
+  /* 暂停/继续按钮：固定宽度避免文字切换抖动 */
+  #btn-toggle { min-width: 88px; font-weight: 600; background: var(--grad-accent); color: #fff; border-color: transparent; box-shadow: var(--shadow-glow); padding: 7px 15px; }
+  #btn-toggle:hover { background: var(--grad-accent-hover); border-color: transparent; }
+
+  .progress { margin: 12px 0 6px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .progress .track { flex: 1; height: 8px; background: var(--track); border-radius: 999px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,.06); }
+  .progress .bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--ok), #4ade80); transition: width .2s; border-radius: 999px; }
+
+  audio { width: 100%; margin: 10px 0 4px; border-radius: var(--radius); }
+
+  #dropzone {
+    border: 2px dashed var(--border-hi); border-radius: var(--radius);
+    padding: 28px 16px; text-align: center; color: var(--muted);
+    background: var(--grad-surface); margin: 12px 0; cursor: pointer;
+    box-shadow: var(--shadow-1), var(--shadow-inset);
+    transition: border-color .18s var(--ease), background .18s var(--ease), box-shadow .18s var(--ease), transform .18s var(--ease);
+  }
+  #dropzone.drag { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  #dropzone.hidden { display: none; }
+
+  /* ---- 生成材料面板（浏览器端对齐）---- */
+  .make { background: var(--grad-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin: 12px 0; box-shadow: var(--shadow-2), var(--shadow-inset); }
+  .make h2 { font-size: 17px; margin: 0 0 4px; display: flex; align-items: center; gap: 6px; color: var(--text); }
+  .make h2 .badge { font-size: 11px; background: var(--ok); color: #fff; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
+  .make .sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .make .sub code { background: rgba(15,23,42,0.06); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
+  .make .field { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .make .field label { font-size: 14px; color: var(--text); }
+  .make .field input[type="file"], .make .field select { font: inherit; max-width: 100%; }
+  .make .field input[type="file"] { font-size: 13px; }
+  .make-actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+  .make .status { font-size: 13px; color: var(--muted); white-space: pre-line; }
+  .make .status:empty { display: none; }
+  .progress-bar-wrap { flex: 1; height: 6px; background: var(--track); border-radius: 999px; overflow: hidden; display: none; }
+  .progress-bar-wrap.show { display: block; }
+  .progress-bar-fill { height: 100%; width: 0%; background: var(--grad-accent); transition: width .15s; border-radius: 999px; }
+  @media (max-width: 540px) { .make .field { grid-template-columns: 1fr; gap: 4px; } }
+
+  ol#list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .row {
+    display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: start;
+    background: var(--grad-surface); border: 1px solid var(--border); border-left: 4px solid transparent;
+    border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow-1);
+    cursor: pointer;
+    transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease);
+  }
+  .row:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
+  .row.current { background: var(--current-grad); border-left-color: var(--current-border); box-shadow: var(--shadow-2), 0 0 0 1px rgba(59,130,246,.15); }
+  .row.hard { border-left-color: var(--hard); }
+  .row .idx { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; padding-top: 2px; }
+  .row .txt { font-size: 16px; }
+  .row .txt .play-ico {
+    color: var(--accent); font-weight: 700; margin-right: 6px;
+    cursor: pointer; user-select: none; display: inline-block; min-width: 16px; text-align: center;
+    transition: transform .12s, opacity .15s;
+    opacity: .45;
+  }
+  .row:hover .txt .play-ico,
+  .row.current .txt .play-ico { opacity: 1; }
+  .row .txt .play-ico:hover { transform: scale(1.25); }
+  .row .txt-ref { font-size: 12px; color: var(--muted); margin-top: 4px; padding-left: 22px; line-height: 1.4; }
+
+  /* 生词高亮 */
+  .vocab-hl {
+    background: rgba(234,179,8,0.16);
+    border-bottom: 2px solid var(--vocab);
+    border-radius: 4px;
+    padding: 0 1px;
+    cursor: pointer;
+    transition: background .15s var(--ease);
+  }
+  .vocab-hl:hover, .vocab-hl.active { background: rgba(234,179,8,0.28); }
+  .vocab-hl::after {
+    content: "📖";
+    font-size: 9px;
+    vertical-align: super;
+    margin-left: 1px;
+    opacity: .55;
+  }
+
+  /* 生词笔记浮层（不挡原文：绝对定位浮于上方，脱离文档流不重排） */
+  #vocab-tip {
+
+    position: fixed;
+    z-index: 50;
+    max-width: 280px;
+    background: #fff;
+    border: 1px solid var(--border-hi);
+    border-radius: 14px;
+    box-shadow: var(--shadow-3);
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text);
+    display: none;
+  }
+  #vocab-tip.show { display: block; }
+  #vocab-tip .vt-word { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  #vocab-tip .vt-note { margin-top: 4px; color: var(--text-soft); }
+  #vocab-tip .vt-example { margin-top: 4px; color: var(--muted); font-style: italic; }
+  .row .actions { display: flex; gap: 4px; align-items: center; }
+  .row .actions button { padding: 5px 8px; font-size: 14px; }
+  .icon-hard[aria-pressed="true"] { color: var(--hard); border-color: var(--hard); }
+  .icon-rec.recording { color: #fff; background: var(--rec); border-color: var(--rec); }
+  .del-rec { padding: 5px 7px; font-size: 12px; line-height: 1; color: var(--muted); }
+  .del-rec:hover { color: var(--rec); border-color: var(--rec); background: rgba(239,68,68,.08); }
+  .hidden { display: none !important; }
+
+  .help { margin-top: 28px; background: var(--grad-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow-2), var(--shadow-inset); }
+  .help summary { cursor: pointer; font-weight: 600; color: var(--text); }
+  .help ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
+  .help kbd { background: rgba(15,23,42,0.06); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; font-size: 12px; color: var(--text); }
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: rgba(255,255,255,0.92);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--border-hi);
+    color: var(--text); padding: 10px 16px; border-radius: 14px;
+    font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 50;
+    box-shadow: var(--shadow-3);
+  }
+  .toast.show { opacity: .96; }
+  .material-title { font-size: 15px; color: var(--muted); margin: 4px 0 0; }
+
+  /* ---- 生词本面板 ---- */
+  #vocab-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+    z-index: 40;
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  #vocab-overlay.show { opacity: 1; pointer-events: auto; }
+  #vocab-panel {
+    position: fixed; top: 0; right: -420px; bottom: 0; width: 400px; max-width: 90vw;
+    background: #fff; box-shadow: var(--shadow-3);
+    border-left: 1px solid var(--border-hi);
+    z-index: 45; transition: right .3s var(--ease); display: flex; flex-direction: column;
+  }
+  #vocab-panel.open { right: 0; }
+  #vocab-panel .vp-header {
+    display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+    border-bottom: 1px solid var(--border); font-size: 17px; font-weight: 600;
+    color: var(--text); background: linear-gradient(180deg, rgba(15,23,42,.02), transparent);
+  }
+  #vocab-panel .vp-header .vp-close {
+    margin-left: auto; cursor: pointer; font-size: 22px; color: var(--muted);
+    background: none; border: none; padding: 2px 6px; line-height: 1;
+  }
+  #vocab-panel .vp-close:hover { color: var(--text); }
+  #vocab-panel .vp-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  #vocab-panel .vp-empty { color: var(--muted); text-align: center; padding: 40px 0; font-size: 14px; }
+  #vocab-panel .vp-item {
+    background: var(--grad-surface-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px;
+    box-shadow: var(--shadow-1);
+  }
+  #vocab-panel .vp-item .vp-word {
+    font-size: 16px; font-weight: 700; color: var(--accent); margin-bottom: 4px;
+  }
+  #vocab-panel .vp-item .vp-note {
+    font-size: 13px; color: var(--text); margin-bottom: 4px; line-height: 1.5;
+  }
+  #vocab-panel .vp-item .vp-example {
+    font-size: 12px; color: var(--muted); font-style: italic; margin-bottom: 6px;
+    line-height: 1.4; border-left: 2px solid var(--accent-soft);
+    padding-left: 8px;
+  }
+  #vocab-panel .vp-item .vp-src {
+    font-size: 11px; color: var(--muted); cursor: pointer;
+    display: block; margin-top: 4px;
+  }
+  #vocab-panel .vp-item .vp-src:hover { color: var(--accent); }
+  #vocab-panel .vp-item .vp-src:hover .vp-src-txt { text-decoration: underline; }
+  #vocab-panel .vp-item .vp-src .vp-src-txt { color: var(--muted); font-style: normal; opacity: .8; }
+
+  /* ---- 材料库面板 ---- */
+  #lib-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+    z-index: 40;
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  #lib-overlay.show { opacity: 1; pointer-events: auto; }
+  #lib-panel {
+    position: fixed; top: 0; right: -420px; bottom: 0; width: 400px; max-width: 90vw;
+    background: #fff; box-shadow: var(--shadow-3);
+    border-left: 1px solid var(--border-hi);
+    z-index: 45; transition: right .3s var(--ease); display: flex; flex-direction: column;
+  }
+  #lib-panel.open { right: 0; }
+  #lib-panel .lib-item {
+    background: var(--grad-surface-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+    box-shadow: var(--shadow-1);
+    transition: border-color .15s, box-shadow .15s, transform .15s var(--ease);
+  }
+  #lib-panel .lib-item:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow-2), 0 0 0 1px rgba(59,130,246,.15); }
+  #lib-panel .lib-item.lib-active { border-left: 4px solid var(--ok); }
+  #lib-panel .lib-item .lib-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  #lib-panel .lib-item .lib-meta { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+  #lib-panel .lib-item .lib-actions { display: flex; gap: 6px; margin-top: 8px; }
+  #lib-panel .lib-item .lib-actions button { font-size: 12px; padding: 3px 8px; border-radius: 6px; }
+  #vocab-panel .vp-item .vp-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  #vocab-panel .vp-item .vp-actions button {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--border-strong); background: transparent; color: var(--muted);
+  }
+  #vocab-panel .vp-item .vp-actions button:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  #vocab-panel .vp-item .vp-actions button.del:hover { background: rgba(239,68,68,.08); color: var(--rec); border-color: var(--rec); }
+  /* 词条 inline 编辑表单（侧栏生词本） */
+  #vocab-panel .vp-edit-form { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  #vocab-panel .vp-edit-form label { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; }
+  #vocab-panel .vp-edit-form textarea {
+    width: 100%; font: inherit; font-size: 13px; line-height: 1.5;
+    border: 1px solid var(--border-strong); border-radius: 8px;
+    padding: 6px 8px; resize: vertical; min-height: 36px;
+    background: #fff; color: var(--text);
+  }
+  #vocab-panel .vp-edit-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  #vocab-panel .vp-edit-form .vp-edit-actions { display: flex; gap: 6px; margin-top: 4px; }
+  #vocab-panel .vp-edit-form .vp-edit-actions button { flex: 1; padding: 6px 10px; font-size: 13px; font-weight: 600; border-radius: 8px; border: 1px solid transparent; }
+  #vocab-panel .vp-edit-form .vp-edit-actions button[data-edit-save] { background: var(--accent); color: #fff; }
+  #vocab-panel .vp-edit-form .vp-edit-actions button[data-edit-save]:hover { background: var(--accent-hover); }
+  #vocab-panel .vp-edit-form .vp-edit-actions button[data-edit-cancel] { background: transparent; color: var(--muted); border-color: var(--border-strong); }
+  #vocab-panel .vp-edit-form .vp-edit-actions button[data-edit-cancel]:hover { background: var(--panel-2); color: var(--text); }
+  #vocab-panel .vp-add-form {
+    background: var(--accent-soft); border-radius: 10px; padding: 12px 14px;
+    margin-bottom: 12px; border: 1px solid var(--accent);
+  }
+  #vocab-panel .vp-add-form label { font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px; }
+  #vocab-panel .vp-add-form input, #vocab-panel .vp-add-form textarea {
+    width: 100%; font: inherit; border: 1px solid var(--border-strong); border-radius: 8px;
+    padding: 6px 8px; margin-bottom: 6px; resize: vertical;
+    background: #fff; color: var(--text);
+  }
+  #vocab-panel .vp-add-form input:focus, #vocab-panel .vp-add-form textarea:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  #vocab-panel .vp-add-form textarea { min-height: 48px; }
+  #vocab-panel .vp-add-form .vp-form-row { display: flex; gap: 6px; }
+  #vocab-panel .vp-add-form .vp-form-row button { flex: 1; }
+
+  /* ---- 艾宾浩斯复习机制 ---- */
+  /* 工具栏「生词本」按钮上的待复习红色角标 */
+  .due-badge {
+    display: none; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px; margin-left: 5px;
+    background: var(--rec); color: #fff; border-radius: 999px;
+    font-size: 11px; font-weight: 700; line-height: 1; vertical-align: middle;
+  }
+  /* 面板头部「开始复习」按钮 */
+  #vocab-panel .vp-review-btn { font-size: 13px; padding: 4px 10px; margin-left: auto; }
+  #vocab-panel .vp-review-btn:disabled { opacity: .45; cursor: not-allowed; }
+  /* 每个词条的复习状态徽章（可点击单独复习） */
+  .vp-status {
+    display: inline-block; margin: 2px 0 6px; padding: 2px 9px;
+    border-radius: 999px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .vp-status.due      { background: rgba(255,69,58,.10); color: var(--rec); border-color: rgba(255,69,58,.35); }
+  .vp-status.solid   { background: rgba(255,159,10,.12); color: var(--hard); border-color: rgba(255,159,10,.35); }
+  .vp-status.ok      { background: var(--accent-soft); color: var(--accent); border-color: rgba(59,130,246,.30); }
+  .vp-status.mastered{ background: rgba(52,215,123,.10); color: var(--ok); border-color: rgba(52,215,123,.35); }
+  /* 复习闪卡 */
+  .vp-review { padding: 2px 0; }
+  .rv-progress { font-size: 12px; color: var(--muted); margin-bottom: 12px; text-align: center; }
+  .vp-flashcard {
+    background: linear-gradient(180deg, #ffffff 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border-strong); border-radius: 16px;
+    padding: 26px 18px; text-align: center; box-shadow: var(--shadow-2);
+  }
+  .vp-flashcard .fc-word { font-size: 25px; font-weight: 800; color: var(--text); margin-bottom: 8px; word-break: break-word; }
+  .vp-flashcard .fc-stage { font-size: 11.5px; color: var(--muted); }
+  .vp-flashcard .fc-answer .fc-note { font-size: 14px; color: var(--text); margin: 10px 0 4px; line-height: 1.5; }
+  .vp-flashcard .fc-answer .fc-example { font-size: 13px; color: var(--muted); font-style: italic; line-height: 1.45; }
+  .vp-flashcard .rv-src {
+    margin-top: 12px; font-size: 13px; padding: 5px 12px; border-radius: 9px;
+    background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(59,130,246,.30);
+  }
+  .rv-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .rv-actions button { flex: 1; padding: 10px; font-size: 14px; font-weight: 600; border-radius: 12px; }
+  .rv-show { background: var(--grad-surface-2); color: var(--text); border: 1px solid var(--border-strong); }
+  .rv-good { background: var(--ok); color: #fff; border: none; box-shadow: 0 4px 14px rgba(52,215,123,.35); }
+  .rv-good:hover { background: #2bc36a; }
+  .rv-again { background: rgba(255,69,58,.10); color: var(--rec); border: 1px solid rgba(255,69,58,.35); }
+  .rv-exit { margin-top: 12px; width: 100%; padding: 8px; font-size: 13px; border-radius: 10px; background: transparent; border: 1px solid var(--border-strong); color: var(--muted); }
+  .vp-review-done { text-align: center; padding: 30px 8px; font-size: 17px; font-weight: 700; }
+  .vp-review-done small { display: block; color: var(--muted); font-weight: 400; margin-top: 6px; font-size: 13px; }
+
+  /* ---- 选中文字弹出按钮 ---- */
+  #sel-popup {
+    position: absolute; display: none; z-index: 35;
+    background: var(--grad-accent); color: #fff; border: none; border-radius: var(--radius-xs);
+    padding: 5px 12px; font-size: 13px; font-weight: 600; cursor: pointer;
+    box-shadow: var(--shadow-glow); white-space: nowrap;
+    transition: opacity .15s, transform .15s;
+  }
+  #sel-popup.show { display: block; animation: popIn .15s ease; }
+  @keyframes popIn { from { opacity: 0; transform: scale(.9) translateY(4px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+  /* ---- 编辑分段模式 ---- */
+  .editbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin: 10px 0 4px; padding: 10px 12px;
+    background: var(--grad-surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow-2), var(--shadow-inset);
+  }
+  .editbar-hint { font-size: 12.5px; color: var(--muted); flex: 1 1 260px; line-height: 1.5; }
+  .editbar-hint b { color: var(--text); font-weight: 600; }
+  .edit-row { align-items: start; }
+  .edit-row .idx { padding-top: 10px; }
+  .edit-body { display: flex; flex-direction: column; gap: 8px; }
+  .edit-text {
+    width: 100%; font: inherit; font-size: 15px; line-height: 1.5; color: var(--text);
+    background: #fff; border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 8px 10px; margin: 0; resize: vertical; min-height: 44px;
+    box-shadow: var(--shadow-inset);
+  }
+  .edit-text:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .edit-times { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+  .edit-times label { display: inline-flex; align-items: center; gap: 5px; }
+  .edit-times input {
+    width: 80px; font: inherit; font-size: 13px; padding: 4px 6px;
+    border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; color: var(--text);
+  }
+  .edit-times input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .edit-times .edit-play { padding: 4px 10px; font-size: 12.5px; }
+  .edit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; align-items: stretch; min-width: 180px; }
+  .edit-actions button { padding: 4px 6px; font-size: 12px; white-space: nowrap; line-height: 1.3; }
+  .edit-actions .edit-add { background: var(--grad-accent); color: #fff; border-color: transparent; font-weight: 600; box-shadow: var(--shadow-glow), inset 0 1px 0 rgba(255,255,255,.28); padding: 4px 6px; }
+  .edit-actions .edit-add:hover { background: var(--grad-accent-hover); border-color: transparent; }
+
+  @media (max-width: 540px) {
+    .row { grid-template-columns: 22px 1fr; }
+    .row .actions { grid-column: 1 / -1; justify-content: flex-start; }
+    #vocab-panel { width: 88vw; right: -92vw; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="app-nav">
+    <span class="brand">🎧 Shadowing English</span>
+    <a class="nav-item active" href="index.html">📚 生成材料</a>
+    <a class="nav-item" href="vocab.html">📖 生词本</a>
+    <a class="nav-item" href="library.html">📚 材料库</a>
+    <span class="nav-sync-slot" style="margin-left:auto"></span>
+  </nav>
+
+  <header>
+    <h1>逐句跟读 · Shadowing English</h1>
+    <p class="sub">点哪句就从哪句开始播，播完自动停 —— 专为英语听力跟读设计</p>
+  </header>
+
+  <div class="toolbar">
+    <div class="group">
+      <span class="lbl">语速</span>
+      <button data-rate="0.5" aria-pressed="false">0.5×</button>
+      <button data-rate="0.75" aria-pressed="false">0.75×</button>
+      <button data-rate="1" aria-pressed="true">1×</button>
+    </div>
+    <div class="group">
+      <button id="btn-toggle" aria-label="暂停或继续播放">⏸ 暂停</button>
+      <button id="btn-loop" aria-pressed="false" aria-label="单句 A-B 循环">🔁 循环</button>
+      <button id="btn-auto" aria-pressed="false" aria-label="自动连播下一句">⏭ 连播</button>
+    </div>
+    <div class="group">
+      <button id="btn-make" class="btn-primary">✨ 生成材料</button>
+      <button id="btn-vocab" class="btn-ghost" aria-label="生词本">📖 生词本<span class="due-badge" id="vocab-due-badge"></span></button>
+      <button id="btn-edit" aria-pressed="false" aria-label="编辑分段">✎ 编辑分段</button>
+      <button id="btn-reset" class="btn-ghost">重置进度</button>
+    </div>
+  </div>
+
+  <div class="editbar hidden" id="editbar">
+    <span class="editbar-hint">✎ <b>编辑分段</b>：直接改文字 / 起止时间；<b>➕ 新增</b>在句后补一句遗漏内容，<b>✂ 拆分</b>按光标一分为二，<b>⬇ 合并下句</b>、<b>🗑 删除</b>；改完点「保存并退出」。</span>
+    <button id="btn-fix">↹ 均分重叠</button>
+    <button id="btn-editdone" class="btn-primary">✓ 保存并退出</button>
+    <button id="btn-editcancel" class="btn-ghost">取消</button>
+  </div>
+
+  <div class="progress">
+    <span id="prog-text">0 / 0</span>
+    <div class="track"><div class="bar" id="prog-bar"></div></div>
+  </div>
+
+  <p class="material-title hidden" id="material-title"></p>
+
+  <audio id="audio" controls preload="metadata"></audio>
+
+  <div id="dropzone">
+    <b>🎯 拖入 MP3 音频即可开始</b><br />
+    <small>或点击选择文件 · 支持 MP3 / WAV / M4A · 浏览器内 AI 自动生成逐句文本</small>
+  </div>
+  <input type="file" id="file-input" class="hidden" multiple accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac,.json,application/json,application/pdf,.pdf" />
+
+  <!-- 浏览器端生成材料：PDF + MP3 → Whisper 对齐 → sentences.json -->
+  <section id="make-panel" class="make hidden" aria-label="生成跟读材料">
+    <h2>✨ 生成跟读材料 <span class="badge">纯浏览器 · 无需服务器</span></h2>
+    <p class="sub">上传 <b>MP3 音频</b> 即可——文字由 AI 直接根据语音生成，逐句跟读天然与语音对上。<br />
+      <small>PDF 为<b>可选项</b>：勾上仅作标准写法对照，不传也能正常跟读。首次使用会下载 AI 模型（约 75 MB），之后缓存在本地。支持 Chrome / Edge / Safari 最新版。</small></p>
+    <div class="field">
+      <label for="mk-pdf">PDF 文字稿（可选·仅对照）</label>
+      <input type="file" id="mk-pdf" accept="application/pdf,.pdf" />
+    </div>
+    <div class="field">
+      <label for="mk-audio">MP3 音频</label>
+      <input type="file" id="mk-audio" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac" />
+    </div>
+    <div class="make-actions">
+      <button id="mk-run" class="btn-primary">⚡ 生成并载入</button>
+      <div class="progress-bar-wrap" id="mk-progress-wrap"><div class="progress-bar-fill" id="mk-progress-bar"></div></div>
+      <span id="mk-status" class="status" role="status" aria-live="polite"></span>
+    </div>
+  </section>
+
+  <ol id="list"></ol>
+
+  <details class="help">
+    <summary>使用说明 / 快捷键</summary>
+    <ul>
+      <li><b>🎯 最快开始：</b>直接把 <b>MP3 音频</b>拖到页面中间虚线框（或点击选择），然后点「⚡ 生成并载入」。浏览器内 AI 自动识别语音、切分句子，无需任何服务器。</li>
+      <li><b>📚 材料库：</b>所有生成过的材料自动保存，点「📚 材料库」可查看和切换。生词、进度、难句标记都跟着材料走，互不干扰。</li>
+      <li><b>已有 sentences.json 时：</b>把音频和 JSON 一起拖进去，或点「📂 选择文件」。</li>
+      <li><b>PDF 可选：</b>生成时可以同时上传 PDF 文字稿，仅作标准写法对照，不影响跟读。</li>
+      <li><b>点句子</b>：自动跳到该句开头播放，播完自动暂停。</li>
+      <li><b>🔁 循环</b>：开启后当前句会反复循环，专攻难句。</li>
+      <li><b>⏭ 连播</b>：播完一句自动接下一句（默认关，跟读建议关）。</li>
+      <li><b>⭐ 难句</b>：标记后左侧变金色，进度存浏览器本地，下次还在。</li>
+      <li><b>🎤 录音</b>：点麦克风录自己的跟读，松开后可用「🔊 我的」回放，或「⮌ 对比」先听原音再听自己。</li>
+      <li><b>📖 生词本</b>：选中不认识的词 → 点「+ 加入生词本」→ 写释义和例句。点击来源可跳回原句播放。数据本地存储，刷新不丢。</li>
+      <li><b>🔁 艾宾浩斯复习</b>：生词按遗忘曲线自动调度（5分钟 → 30分钟 → 12小时 → 1天 → 2天 → 4天 → 7天 → 15天）。到期的词在生词本置顶并带红色角标，点「🔁 复习」进入闪卡模式：先回忆 →「显示答案」→ 自评「记得 / 忘了」；记得则进入下一阶段（间隔拉长），忘了则回到第一阶段。完成全部 8 阶后标记「已掌握」。点词条上的状态徽章可单独复习该词。复习记录随生词本持久化。</li>
+      <li><b>✎ 编辑分段</b>：AI 偶尔会把句子切错（如某句音频把下一句都包进去、或漏了文字）。点「✎ 编辑分段」可改每句文字/起止时间，<b>➕ 新增</b>在两句之间补回遗漏的句子、✂ 拆分、⬇ 合并下句、🗑 删除，▶ 试听核对；「↹ 均分重叠」一键修掉重叠区间；改完「保存并退出」会写回本地。</li>
+      <li>快捷键：<kbd>空格</kbd> 播放/暂停 · <kbd>←</kbd>/<kbd>→</kbd> 上/下一句 · <kbd>L</kbd> 循环 · <kbd>S</kbd> 标难句 · <kbd>R</kbd> 录音。</li>
+    </ul>
+  </details>
+</div>
+
+<!-- 生词本面板 -->
+<div id="vocab-overlay" aria-hidden="true"></div>
+<aside id="vocab-panel" aria-label="生词本" aria-hidden="true">
+  <div class="vp-header">
+    <span>📖 生词本</span>
+    <span id="vocab-count" style="font-size:12px;color:var(--muted);font-weight:400;">0 个词</span>
+    <button id="vocab-review" class="vp-review-btn">🔁 复习</button>
+    <button class="vp-close" id="vocab-close" aria-label="关闭">&times;</button>
+  </div>
+  <div class="vp-body" id="vocab-body"></div>
+</aside>
+
+<!-- 材料库面板 -->
+<div id="lib-overlay" aria-hidden="true"></div>
+<aside id="lib-panel" aria-label="材料库" aria-hidden="true">
+  <div class="vp-header">
+    <span>📚 材料库</span>
+    <span id="lib-count" style="font-size:12px;color:var(--muted);font-weight:400;">0 个材料</span>
+    <button class="vp-close" id="lib-close" aria-label="关闭">&times;</button>
+  </div>
+  <div class="vp-body" id="lib-body">
+    <div class="vp-empty">还没有保存的材料<br><small>生成材料后会自动存到这里</small></div>
+  </div>
+</aside>
+
+<!-- 选中文字弹出的生词按钮 -->
+<button id="sel-popup">+ 加入生词本</button>
+
+<div class="toast" id="toast"></div>
+
+<!-- 生词笔记浮层（hover 显示预览，点击固定显示，再点别处关闭） -->
+<div id="vocab-tip" role="dialog" aria-label="生词笔记">
+  <div class="vt-word"></div>
+  <div class="vt-note"></div>
+  <div class="vt-example"></div>
+</div>
+
+<!-- ==================== 主播放器逻辑 ==================== -->
+<script>
+(function () {
+  "use strict";
+
+  const audio = document.getElementById("audio");
+  const recAudio = new Audio();
+  const listEl = document.getElementById("list");
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("file-input");
+  const progBar = document.getElementById("prog-bar");
+  const progText = document.getElementById("prog-text");
+  const materialTitle = document.getElementById("material-title");
+  const toastEl = document.getElementById("toast");
+
+  const state = {
+    sentences: [],
+    meta: {},
+    materialId: "material",
+    playingIndex: null,
+    lastIndex: 0,
+    rate: 1,
+    loop: false,
+    autoAdvance: false,
+    programmaticSeek: false,
+    hard: new Set(),
+    played: new Set(),
+    recordings: {},
+    mediaRecorder: null,
+    recordingId: null,
+    audioBlob: null,    // 用于编辑分段后回写 IndexedDB
+    editMode: false,    // 编辑分段模式
+    previewEnd: null,   // 试听区间的结束时间
+  };
+
+  // ---------- 工具 ----------
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { toastEl.classList.remove("show"); }, 2200);
+  }
+  window.toast = toast;  // 暴露给 module script 使用
+  function sanitizeId(s) { return (s || "material").replace(/[^\w一-龥-]+/g, "_").slice(0, 48) || "material"; }
+  function lsKey(kind) { return "shadowing:" + kind + ":" + state.materialId; }
+
+  // ---------- IndexedDB：持久化「音频 + 生成的句子」，刷新自动恢复 ----------
+  const DB_NAME = "shadowingDB", DB_STORE = "materials";
+  function openDB() {
+    return new Promise(function (res, rej) {
+      if (!window.indexedDB) { rej(new Error("浏览器不支持 IndexedDB")); return; }
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore(DB_STORE, { keyPath: "id" }); };
+      req.onsuccess = function () { res(req.result); };
+      req.onerror = function () { rej(req.error); };
+    });
+  }
+  function idbPut(id, material, audioBlob) {
+    return openDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        const tx = db.transaction(DB_STORE, "readwrite");
+        tx.objectStore(DB_STORE).put({ id: id, material: material, audioBlob: audioBlob, updatedAt: Date.now() });
+        tx.oncomplete = function () { res(); };
+        tx.onerror = function () { rej(tx.error); };
+      });
+    });
+  }
+  function idbGet(id) {
+    return openDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        const tx = db.transaction(DB_STORE, "readonly");
+        const r = tx.objectStore(DB_STORE).get(id);
+        r.onsuccess = function () { res(r.result || null); };
+        r.onerror = function () { rej(r.error); };
+      });
+    });
+  }
+  function idbGetAll() {
+    return openDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        const tx = db.transaction(DB_STORE, "readonly");
+        const r = tx.objectStore(DB_STORE).getAll();
+        r.onsuccess = function () { res(r.result || []); };
+        r.onerror = function () { rej(r.error); };
+      });
+    });
+  }
+  function idbDelete(id) {
+    return openDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        const tx = db.transaction(DB_STORE, "readwrite");
+        tx.objectStore(DB_STORE).delete(id);
+        tx.oncomplete = function () { res(); };
+        tx.onerror = function () { rej(tx.error); };
+      });
+    });
+  }
+  // 暴露给 module script 使用（生成材料后持久化）
+  window._idbPut = idbPut;
+  window._idbGet = idbGet;
+  window._idbGetAll = idbGetAll;
+  window._idbDelete = idbDelete;
+  window.state = state;
+
+  function loadProgress() {
+    try {
+      const h = JSON.parse(localStorage.getItem(lsKey("hard")) || "[]");
+      state.hard = new Set(h);
+      const p = JSON.parse(localStorage.getItem(lsKey("progress")) || "{}");
+      state.played = new Set(p.played || []);
+      state.lastIndex = p.lastIndex || 0;
+    } catch (e) {}
+  }
+  function saveProgress() {
+    try {
+      localStorage.setItem(lsKey("hard"), JSON.stringify([...state.hard]));
+      localStorage.setItem(lsKey("progress"), JSON.stringify({
+        played: [...state.played], lastIndex: state.lastIndex,
+      }));
+    } catch (e) {}
+    if (typeof syncUploadProgressDebounced === "function") syncUploadProgressDebounced();
+  }
+
+  // ---------- 载入材料 ----------
+  window.loadMaterial = function (jsonObj, audioSrc) {
+    if (!jsonObj || !Array.isArray(jsonObj.sentences) || jsonObj.sentences.length === 0) {
+      toast("sentences.json 格式不正确"); return;
+    }
+    state.meta = jsonObj.meta || {};
+    state.sentences = jsonObj.sentences;
+    state.audioBlob = (audioSrc && audioSrc.blob) || state.audioBlob || null;
+    state.materialId = sanitizeId(state.meta.title || (audioSrc && audioSrc.name) || "material");
+    state.playingIndex = null;
+    state.recordings = {};
+    state.lastIndex = 0;
+    audio.src = (audioSrc && audioSrc.url) ? audioSrc.url : audioSrc;
+    loadProgress();
+    loadVocab(); // 必须在 renderList 之前加载当前材料的生词（高亮依赖它）
+    dropzone.classList.add("hidden");
+    materialTitle.classList.remove("hidden");
+    materialTitle.textContent = "材料：" + (state.meta.title || "（未命名）") +
+      " · 共 " + state.sentences.length + " 句";
+    renderList();
+    updateProgress();
+    toast("已载入 " + state.sentences.length + " 句");
+    // 云端同步：上传当前材料（含音频）+ 记 lastMaterial
+    if (typeof syncUploadCurrentMaterial === "function") syncUploadCurrentMaterial();
+  };
+
+  // ---------- 渲染列表 ----------
+  function renderList() {
+    listEl.innerHTML = "";
+    state.sentences.forEach(function (s, i) {
+      if (state.editMode) { buildEditRow(s, i); return; }
+      const li = document.createElement("li");
+      li.className = "row";
+      li.dataset.id = String(i);
+      li.setAttribute("role", "button");
+      li.setAttribute("tabindex", "0");
+      li.setAttribute("aria-label", "第 " + (i + 1) + " 句：" + s.text);
+
+      const idx = document.createElement("div");
+      idx.className = "idx";
+      idx.textContent = String(i + 1);
+
+      const txt = document.createElement("div");
+      txt.className = "txt";
+      const ico = document.createElement("span");
+      ico.className = "play-ico"; ico.textContent = "▶";
+      // 点击播放图标：当前句 → 暂停/继续；其他句 → 播放该句
+      ico.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (state.playingIndex === i && !audio.paused) {
+          audio.pause();
+        } else {
+          playSentence(i);
+        }
+      });
+      txt.appendChild(ico);
+      // 生词高亮：把文本里匹配的 vocab 词包成 span（不破坏播放图标）
+      const txtMain = document.createElement("span");
+      txtMain.className = "txt-main";
+      txtMain.innerHTML = highlightVocab(s.text);
+      txt.appendChild(txtMain);
+
+      // PDF 原文对照（若可用且索引对齐）
+      const pdfRef = state.meta && state.meta.pdfReference;
+      if (pdfRef && pdfRef[i]) {
+        const ref = document.createElement("div");
+        ref.className = "txt-ref";
+        ref.textContent = "原文：" + pdfRef[i];
+        txt.appendChild(ref);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+
+      const star = document.createElement("button");
+      star.className = "icon-hard";
+      star.textContent = "⭐";
+      star.setAttribute("aria-label", "标记难句");
+      star.setAttribute("aria-pressed", state.hard.has(i) ? "true" : "false");
+      if (state.hard.has(i)) star.setAttribute("aria-pressed", "true");
+
+      const rec = document.createElement("button");
+      rec.className = "icon-rec";
+      rec.textContent = "🎤";
+      rec.setAttribute("aria-label", "录音跟读");
+
+      const mine = document.createElement("button");
+      mine.className = "play-mine hidden";
+      mine.textContent = "🔊 我的";
+      mine.setAttribute("aria-label", "播放我的录音");
+
+      const cmp = document.createElement("button");
+      cmp.className = "play-cmp hidden";
+      cmp.textContent = "⮌ 对比";
+      cmp.setAttribute("aria-label", "对比原音与我的录音");
+
+      const delRec = document.createElement("button");
+      delRec.className = "del-rec hidden";
+      delRec.textContent = "✕";
+      delRec.setAttribute("aria-label", "删除录音");
+      delRec.title = "删除这条录音";
+
+      actions.append(star, rec, mine, cmp, delRec);
+
+      li.append(idx, txt, actions);
+      listEl.appendChild(li);
+
+      li.addEventListener("click", function (e) {
+        if (e.target.closest("button")) return;
+        if (e.target.closest(".vocab-hl")) return; // 生词高亮点击不触发播放
+        playSentence(i);
+      });
+      li.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); playSentence(i); }
+      });
+      star.addEventListener("click", function (e) { e.stopPropagation(); toggleHard(i, star); });
+      rec.addEventListener("click", function (e) { e.stopPropagation(); toggleRecord(i, rec); });
+      mine.addEventListener("click", function (e) { e.stopPropagation(); playRecording(i); });
+      cmp.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (state.recordings[i]) { playRecording(i); recAudio.onended = function () { recAudio.onended = null; playSentence(i); }; }
+        else playSentence(i);
+      });
+      delRec.addEventListener("click", function (e) { e.stopPropagation(); deleteRecording(i); });
+    });
+  }
+
+  // ---------- 编辑分段模式 ----------
+  function num(v) { return (typeof v === "number" && isFinite(v)) ? v : 0; }
+
+  // 重新编号 hard / played 集合（拆分 +1、删除/合并 -1），保持标记跟随正确句子
+  function shiftSets(afterIdx, delta) {
+    const nh = new Set(), np = new Set();
+    state.hard.forEach(function (v) { if (v < afterIdx) nh.add(v); else if (v > afterIdx) nh.add(v + delta); });
+    state.played.forEach(function (v) { if (v < afterIdx) np.add(v); else if (v > afterIdx) np.add(v + delta); });
+    state.hard = nh; state.played = np;
+    saveProgress();
+  }
+
+  // 试听某句区间（不干扰正常跟读的高亮/进度）
+  function previewRange(start, end) {
+    if (!isFinite(audio.duration) || audio.duration <= 0) { toast("音频未就绪"); return; }
+    let s = Number(start), e = Number(end);
+    if (!isFinite(s)) s = 0;
+    if (!isFinite(e) || e <= s) e = Math.min(audio.duration, s + 1);
+    if (e > audio.duration) e = audio.duration;
+    state.programmaticSeek = true;
+    audio.currentTime = s;
+    state.previewEnd = e;
+    const p = audio.play();
+    if (p && p.catch) p.catch(function () {});
+  }
+
+  function buildEditRow(s, i) {
+    const li = document.createElement("li");
+    li.className = "row edit-row";
+    li.dataset.id = String(i);
+
+    const idx = document.createElement("div");
+    idx.className = "idx";
+    idx.textContent = String(i + 1);
+
+    const body = document.createElement("div");
+    body.className = "edit-body";
+
+    const ta = document.createElement("textarea");
+    ta.className = "edit-text";
+    ta.value = s.text || "";
+    ta.setAttribute("aria-label", "第 " + (i + 1) + " 句文字");
+    ta.addEventListener("input", function () { state.sentences[i].text = ta.value; });
+
+    const times = document.createElement("div");
+    times.className = "edit-times";
+    const labS = document.createElement("label"); labS.textContent = "开始 ";
+    const inS = document.createElement("input");
+    inS.type = "number"; inS.step = "0.1"; inS.min = "0"; inS.value = num(s.start);
+    inS.addEventListener("input", function () { state.sentences[i].start = parseFloat(inS.value) || 0; });
+    labS.appendChild(inS);
+    const labE = document.createElement("label"); labE.textContent = "结束 ";
+    const inE = document.createElement("input");
+    inE.type = "number"; inE.step = "0.1"; inE.min = "0"; inE.value = num(s.end);
+    inE.addEventListener("input", function () { state.sentences[i].end = parseFloat(inE.value) || 0; });
+    labE.appendChild(inE);
+    const playBtn = document.createElement("button");
+    playBtn.className = "edit-play";
+    playBtn.textContent = "▶ 试听";
+    playBtn.addEventListener("click", function (e) { e.stopPropagation(); previewRange(state.sentences[i].start, state.sentences[i].end); });
+    times.append(labS, labE, playBtn);
+
+    body.append(ta, times);
+
+    const actions = document.createElement("div");
+    actions.className = "edit-actions";
+    const bSplit = document.createElement("button");
+    bSplit.textContent = "✂ 拆分";
+    bSplit.addEventListener("click", function (e) { e.stopPropagation(); splitSentence(i, ta.selectionStart); });
+    const bMerge = document.createElement("button");
+    bMerge.textContent = "⬇ 合并下句";
+    if (i >= state.sentences.length - 1) bMerge.disabled = true;
+    bMerge.addEventListener("click", function (e) { e.stopPropagation(); mergeSentence(i); });
+    const bDel = document.createElement("button");
+    bDel.textContent = "🗑 删除";
+    bDel.addEventListener("click", function (e) { e.stopPropagation(); deleteSentence(i); });
+    const bAdd = document.createElement("button");
+    bAdd.className = "edit-add";
+    bAdd.textContent = "➕ 新增";
+    bAdd.addEventListener("click", function (e) { e.stopPropagation(); addSentence(i); });
+    actions.append(bSplit, bMerge, bDel, bAdd);
+
+    li.append(idx, body, actions);
+    listEl.appendChild(li);
+  }
+
+  function splitSentence(i, caret) {
+    const s = state.sentences[i];
+    const text = s.text || "";
+    const pos = (typeof caret === "number" && caret > 0 && caret < text.length) ? caret : Math.floor(text.length / 2);
+    const t1 = text.slice(0, pos).trim();
+    const t2 = text.slice(pos).trim();
+    if (!t1 || !t2) { toast("把光标放在句子中间再点拆分"); return; }
+    const dur = (s.end - s.start) || 1;
+    const ratio = pos / text.length;
+    const mid = s.start + dur * ratio;
+    s.text = t1; s.end = mid;
+    const ns = { text: t2, start: mid, end: Math.min(isFinite(audio.duration) ? audio.duration : s.end, s.start + dur) };
+    state.sentences.splice(i + 1, 0, ns);
+    shiftSets(i, +1);
+    audio.pause(); state.playingIndex = null; highlight(null);
+    renderList();
+    toast("已拆分为两句");
+  }
+
+  function mergeSentence(i) {
+    if (i >= state.sentences.length - 1) return;
+    const s = state.sentences[i];
+    const nx = state.sentences[i + 1];
+    const sep = (s.text && s.text.trim() && nx.text && nx.text.trim()) ? " " : "";
+    s.text = (s.text || "") + sep + (nx.text || "");
+    s.end = nx.end;
+    state.sentences.splice(i + 1, 1);
+    shiftSets(i + 1, -1);
+    audio.pause(); state.playingIndex = null; highlight(null);
+    renderList();
+    toast("已合并到下一句");
+  }
+
+  function deleteSentence(i) {
+    state.sentences.splice(i, 1);
+    shiftSets(i, -1);
+    audio.pause(); state.playingIndex = null; highlight(null);
+    renderList();
+    toast("已删除第 " + (i + 1) + " 句");
+  }
+
+  // 在指定句之后插入一个空白新句（补回被 AI 漏掉的内容）
+  function addSentence(i) {
+    const cur = state.sentences[i];
+    const nx = state.sentences[i + 1];
+    const d = (isFinite(audio.duration) && audio.duration > 0) ? audio.duration
+      : (state.sentences.length ? state.sentences[state.sentences.length - 1].end : 0);
+    let start = cur ? (cur.end || 0) : 0;
+    let end = nx ? Math.min(d, nx.start) : Math.min(d, start + 1);
+    if (!(end > start)) end = Math.min(d, start + 0.5);
+    const ns = { text: "", start: start, end: end };
+    state.sentences.splice(i + 1, 0, ns);
+    shiftSets(i + 1, +1);
+    audio.pause(); state.playingIndex = null; highlight(null);
+    renderList();
+    const newLi = listEl.querySelector('li[data-id="' + (i + 1) + '"]');
+    if (newLi) { const ta = newLi.querySelector(".edit-text"); if (ta) ta.focus(); }
+    toast("已在第 " + (i + 1) + " 句后新增一句，填入文字并核对起止时间");
+  }
+
+  // 自动均分重叠 / 零时长区间（解决「某句音频把下一句都囊括」的情况）
+  function fixOverlaps() {
+    const d = (isFinite(audio.duration) && audio.duration > 0) ? audio.duration
+      : (state.sentences.length ? state.sentences[state.sentences.length - 1].end : 0);
+    let changed = 0;
+    for (let i = 0; i < state.sentences.length; i++) {
+      const s = state.sentences[i];
+      if (!isFinite(s.start)) s.start = i === 0 ? 0 : state.sentences[i - 1].end;
+      if (!isFinite(s.end)) s.end = s.start + 1;
+      if (s.end > d) s.end = d;
+      if (s.end <= s.start) { s.end = Math.min(d, s.start + 0.5); changed++; }
+      if (i > 0) {
+        const prev = state.sentences[i - 1];
+        if (s.start < prev.end - 0.001) {
+          const mid = (prev.end + s.start) / 2;
+          prev.end = mid; s.start = mid; changed++;
+        }
+      }
+    }
+    renderList();
+    toast(changed ? ("已均分 " + changed + " 处重叠/零时长区间") : "没有发现重叠区间");
+  }
+
+  function enterEditMode() {
+    if (!state.sentences.length) { toast("没有可编辑的句子"); return; }
+    audio.pause(); state.playingIndex = null; highlight(null);
+    state._editBackup = JSON.parse(JSON.stringify(state.sentences)); // 取消时回滚
+    state.editMode = true;
+    document.getElementById("btn-edit").setAttribute("aria-pressed", "true");
+    document.getElementById("editbar").classList.remove("hidden");
+    renderList();
+    toast("编辑模式：修改文字/时间，或拆分、合并、删除");
+  }
+  function exitEditMode(save) {
+    state.editMode = false;
+    if (!save && state._editBackup) {
+      // 取消：丢弃本次所有修改，恢复原分段与生词绑定
+      state.sentences = state._editBackup;
+      state._editBackup = null;
+      loadVocab();
+      renderList();
+      toast("已取消，分段未改动");
+      return;
+    }
+    state._editBackup = null;
+    state.previewEnd = null;
+    audio.pause();
+    document.getElementById("btn-edit").setAttribute("aria-pressed", "false");
+    document.getElementById("editbar").classList.add("hidden");
+    if (save) {
+      state.sentences.forEach(function (s, i) { s.idx = i; });
+      const blob = state.audioBlob;
+      const material = { meta: state.meta, sentences: state.sentences };
+      if (blob) {
+        window._idbPut(state.materialId, material, blob)
+          .then(function () { toast("分段已保存（" + state.sentences.length + " 句）"); })
+          .catch(function () { toast("写入库失败，但本次修改已生效"); });
+      } else {
+        toast("分段已更新（音频未缓存，刷新可能丢失）");
+      }
+      loadVocab(); // 句子结构变化后，按词模糊重新绑定生词来源
+    }
+    renderList();
+  }
+
+  // ---------- 播放控制 ----------
+  function highlight(i) {
+    const rows = listEl.children;
+    for (let r = 0; r < rows.length; r++) rows[r].classList.remove("current");
+    if (i == null || !rows[i]) return;
+    rows[i].classList.add("current");
+    rows[i].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  // 同步每句的播放图标：当前播放中显示 ⏸，其他显示 ▶
+  function syncPlayIcons() {
+    const rows = listEl.children;
+    const playingIdx = state.playingIndex;
+    for (let r = 0; r < rows.length; r++) {
+      const ico = rows[r].querySelector(".play-ico");
+      if (ico) ico.textContent = (r === playingIdx && !audio.paused) ? "⏸" : "▶";
+    }
+  }
+
+  function playSentence(i) {
+    if (i < 0 || i >= state.sentences.length) return;
+    const s = state.sentences[i];
+    state.lastIndex = i;
+    state.playingIndex = i;
+    audio.playbackRate = state.rate;
+    highlight(i);
+    syncPlayIcons();
+    function go() {
+      state.programmaticSeek = true;
+      audio.currentTime = s.start + 0.02;
+      const p = audio.play();
+      if (p && p.catch) p.catch(function () { toast("无法播放，请检查音频文件"); });
+    }
+    if (audio.readyState >= 1 && isFinite(audio.duration)) go();
+    else audio.addEventListener("loadedmetadata", go, { once: true });
+  }
+
+  // 暂停 / 继续：读到一半想停，点一下继续（不会跳句，从当前位置接着播）
+  function togglePlayPause() {
+    if (state.playingIndex == null && state.lastIndex == null) return;
+    if (audio.paused) {
+      // 没在播：若还没开始跟读，先播上一句；已在播但被暂停，则从当前位置继续
+      if (state.playingIndex == null) playSentence(state.lastIndex);
+      else {
+        const p = audio.play();
+        if (p && p.catch) p.catch(function () {});
+      }
+    } else {
+      audio.pause();
+    }
+  }
+
+  function markPlayed(i) {
+    state.played.add(i);
+    saveProgress();
+    updateProgress();
+  }
+
+  function updateProgress() {
+    const total = state.sentences.length || 0;
+    const done = state.played.size;
+    progText.textContent = done + " / " + total;
+    progBar.style.width = total ? (done / total * 100) + "%" : "0%";
+  }
+
+  audio.addEventListener("timeupdate", function () {
+    // 试听区间：到结束点自动停，不干扰正常跟读高亮
+    if (state.previewEnd != null) {
+      if (audio.currentTime >= state.previewEnd - 0.04) { audio.pause(); state.previewEnd = null; }
+      return;
+    }
+    if (state.playingIndex == null) return;
+    const cur = state.sentences[state.playingIndex];
+    if (!cur) return;
+    const t = audio.currentTime;
+
+    // 实时高亮：若播放位置已进入「下一句」区间，提前把高亮跟过去
+    // （处理时间戳边界误差 + 连播/拖拽场景，保证高亮始终跟随语音）
+    if (t > cur.start) {
+      for (let i = state.playingIndex + 1; i < state.sentences.length; i++) {
+        const ns = state.sentences[i];
+        if (t >= ns.start) {
+          state.playingIndex = i;
+          highlight(i);
+          break;
+        } else break;
+      }
+    }
+
+    if (t >= cur.end - 0.04) {
+      if (state.loop) {
+        state.programmaticSeek = true;
+        audio.currentTime = cur.start + 0.02;
+      } else {
+        audio.pause();
+        const done = state.playingIndex;
+        state.playingIndex = null;
+        highlight(null);
+        syncPlayIcons();
+        markPlayed(done);
+        if (state.autoAdvance) playSentence(done + 1);
+      }
+    }
+  });
+
+  audio.addEventListener("seeking", function () {
+    if (state.programmaticSeek) { state.programmaticSeek = false; return; }
+    if (state.playingIndex != null) {
+      const s = state.sentences[state.playingIndex];
+      if (s && Math.abs(audio.currentTime - (s.start + 0.02)) > 0.6) {
+        state.playingIndex = null; highlight(null);
+      }
+    }
+  });
+
+  // ---------- 难句标记 ----------
+  function toggleHard(i, btn) {
+    if (state.hard.has(i)) state.hard.delete(i); else state.hard.add(i);
+    const on = state.hard.has(i);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    listEl.children[i].classList.toggle("hard", on);
+    saveProgress();
+    toast(on ? "已标记为难句" : "已取消难句");
+  }
+
+  // ---------- 录音 ----------
+  function toggleRecord(i, btn) {
+    if (state.mediaRecorder) { stopRecord(); return; }
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast("当前浏览器不支持录音"); return; }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      const chunks = [];
+      const mr = new MediaRecorder(stream);
+      state.mediaRecorder = mr;
+      state.recordingId = i;
+      mr.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+      mr.onstop = function () {
+        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+        if (state.recordings[i] && state.recordings[i].url) URL.revokeObjectURL(state.recordings[i].url);
+        state.recordings[i] = { url: URL.createObjectURL(blob) };
+        const row = listEl.children[i];
+        row.querySelector(".play-mine").classList.remove("hidden");
+        row.querySelector(".play-cmp").classList.remove("hidden");
+        row.querySelector(".del-rec").classList.remove("hidden");
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        state.mediaRecorder = null; state.recordingId = null;
+        btn.classList.remove("recording"); btn.textContent = "🎤";
+        toast("录音完成，可点击「🔊 我的」回放");
+      };
+      mr.start();
+      btn.classList.add("recording"); btn.textContent = "⏹";
+      toast("录音中… 再次点击停止");
+    }).catch(function () { toast("麦克风权限被拒绝"); });
+  }
+  function stopRecord() {
+    if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") state.mediaRecorder.stop();
+  }
+  function playRecording(i) {
+    const r = state.recordings[i];
+    if (!r) return;
+    recAudio.src = r.url;
+    recAudio.play().catch(function () { toast("录音回放失败"); });
+  }
+  // 删除某句的录音（不重新录，直接丢弃）
+  function deleteRecording(i) {
+    if (!state.recordings[i]) return;
+    if (!confirm("删除这句的录音？")) return;
+    try { URL.revokeObjectURL(state.recordings[i].url); } catch (_) {}
+    delete state.recordings[i];
+    recAudio.pause(); // 如果正在播放这条录音，先停掉
+    const row = listEl.children[i];
+    if (row) {
+      row.querySelector(".play-mine").classList.add("hidden");
+      row.querySelector(".play-cmp").classList.add("hidden");
+      row.querySelector(".del-rec").classList.add("hidden");
+    }
+    toast("录音已删除");
+  }
+
+  // ---------- 工具栏 ----------
+  document.querySelectorAll("[data-rate]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.rate = parseFloat(b.dataset.rate);
+      audio.playbackRate = state.rate;
+      document.querySelectorAll("[data-rate]").forEach(function (x) {
+        x.setAttribute("aria-pressed", x === b ? "true" : "false");
+      });
+      toast("语速 " + state.rate + "×");
+    });
+  });
+  const btnLoop = document.getElementById("btn-loop");
+  btnLoop.addEventListener("click", function () {
+    state.loop = !state.loop;
+    btnLoop.setAttribute("aria-pressed", state.loop ? "true" : "false");
+    toast(state.loop ? "单句循环：开" : "单句循环：关");
+  });
+  const btnAuto = document.getElementById("btn-auto");
+  btnAuto.addEventListener("click", function () {
+    state.autoAdvance = !state.autoAdvance;
+    btnAuto.setAttribute("aria-pressed", state.autoAdvance ? "true" : "false");
+    toast(state.autoAdvance ? "自动连播：开" : "自动连播：关");
+  });
+
+  // 暂停 / 继续
+  const btnToggle = document.getElementById("btn-toggle");
+  function syncToggleLabel() {
+    const playing = !audio.paused && state.playingIndex != null;
+    btnToggle.textContent = playing ? "⏸ 暂停" : "▶ 继续";
+    syncPlayIcons();
+  }
+  btnToggle.addEventListener("click", function () {
+    togglePlayPause();
+    syncToggleLabel();
+  });
+  // 播放/暂停事件自动同步按钮文字（含句子自然结束、空格键切换等场景）
+  audio.addEventListener("play", syncToggleLabel);
+  audio.addEventListener("pause", syncToggleLabel);
+  audio.addEventListener("ended", syncToggleLabel);
+  syncToggleLabel();
+
+  document.getElementById("btn-reset").addEventListener("click", function () {
+    state.hard.clear(); state.played.clear(); state.lastIndex = 0;
+    saveProgress(); updateProgress();
+    renderList();
+    toast("进度与难句已清空");
+  });
+
+  // 编辑分段模式：进入 / 一键均分 / 保存退出 / 取消
+  document.getElementById("btn-edit").addEventListener("click", function () {
+    if (state.editMode) exitEditMode(true); else enterEditMode();
+  });
+  document.getElementById("btn-fix").addEventListener("click", function () { fixOverlaps(); });
+  document.getElementById("btn-editdone").addEventListener("click", function () { exitEditMode(true); });
+  document.getElementById("btn-editcancel").addEventListener("click", function () { exitEditMode(false); });
+
+  // ---------- 生成材料面板开关 ----------
+  const btnMake = document.getElementById("btn-make");
+  const makePanel = document.getElementById("make-panel");
+  btnMake.addEventListener("click", function () { makePanel.classList.toggle("hidden"); });
+
+  // ---------- 拖拽 / 点击虚线框 → 智能分流 ----------
+  dropzone.addEventListener("click", function () { fileInput.click(); });
+  dropzone.addEventListener("dragover", function (e) { e.preventDefault(); dropzone.classList.add("drag"); });
+  dropzone.addEventListener("dragleave", function () { dropzone.classList.remove("drag"); });
+  dropzone.addEventListener("drop", function (e) {
+    e.preventDefault(); dropzone.classList.remove("drag");
+    handleFilesSmart(e.dataTransfer.files);
+  });
+  fileInput.addEventListener("change", function () { handleFilesSmart(fileInput.files); });
+
+  /**
+   * 智能文件处理：
+   * - 只有音频文件 → 自动填入生成面板，打开面板（一键生成模式）
+   * - 音频 + sentences.json → 直接载入（兼容旧流程）
+   * - 音频 + PDF → 填入生成面板，PDF 也自动填好
+   * - 其他情况 → 提示
+   */
+  function handleFilesSmart(files) {
+    let audioFile = null, jsonFile = null, pdfFile = null;
+    for (const f of files) {
+      if (!audioFile && (f.type.startsWith("audio/") || /\.(mp3|wav|m4a|ogg|aac|flac)$/i.test(f.name))) audioFile = f;
+      else if (!jsonFile && (f.type === "application/json" || /\.json$/i.test(f.name))) jsonFile = f;
+      else if (!pdfFile && (f.type === "application/pdf" || /\.pdf$/i.test(f.name))) pdfFile = f;
+    }
+
+    if (!audioFile) { toast("请选择一个音频文件（MP3/WAV/M4A）"); return; }
+
+    // 情况 A：音频 + JSON → 直接载入（旧流程兼容）
+    if (jsonFile) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        try {
+          const obj = JSON.parse(reader.result);
+          loadMaterial(obj, { url: URL.createObjectURL(audioFile), name: audioFile.name });
+          idbPut(state.materialId, obj, audioFile).catch(function () {});
+        } catch (e) { toast("JSON 解析失败"); }
+      };
+      reader.readAsText(jsonFile);
+      return;
+    }
+
+    // 情况 B：只有音频（± PDF）→ 自动填入生成面板，一键开始
+    const mkPanel = document.getElementById("make-panel");
+    const mkAudio = document.getElementById("mk-audio");
+    const mkPdf = document.getElementById("mk-pdf");
+
+    // 用 DataTransfer 把文件填入 input（让用户看到文件名）
+    fillFileInput(mkAudio, audioFile);
+    if (pdfFile) fillFileInput(mkPdf, pdfFile);
+
+    // 打开生成面板
+    mkPanel.classList.remove("hidden");
+    toast("已选音频：" + audioFile.name + "，点「⚡ 生成并载入」开始");
+
+    // 可选：如果用户之前已经跑过这个文件名，提示有缓存
+    idbGetAll().then(function (rows) {
+      if (rows) {
+        for (let i = 0; i < rows.length; i++) {
+          if (rows[i].material && rows[i].material.meta &&
+              rows[i].material.meta.audio === audioFile.name) {
+            setStatus("💡 该文件之前已生成过，可直接恢复。或重新生成覆盖。");
+            break;
+          }
+        }
+      }
+    }).catch(function () {});
+  }
+
+  /** 把 File 对象填入 <input type="file">（显示文件名） */
+  function fillFileInput(inputEl, file) {
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      inputEl.files = dt.files;
+      // 触发 change 事件让 UI 更新
+      inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (_) {
+      // Safari 等不支持 DataTransfer 时降级：只存引用，用户需手动重选
+      inputEl._pendingFile = file;
+    }
+  }
+
+  // 启动时：先加载已存生词本；再从 IndexedDB 恢复上次使用的材料（含音频），避免每次刷新重跑 Whisper
+  window.addEventListener("DOMContentLoaded", function () {
+    loadVocab(); // 即使还没载入材料，生词本数据也先准备好
+
+    // 优先读取 URL 参数（从生词本/材料库点击跳来）：?material=<id>&play=<n>
+    var urlParams = new URLSearchParams(window.location.search);
+    var urlMaterialId = urlParams.get("material");
+    var urlPlayIdx = parseInt(urlParams.get("play"), 10);
+    if (!isNaN(urlPlayIdx) && urlPlayIdx < 0) urlPlayIdx = NaN;
+
+    // 尝试恢复上次使用的材料（优先）或最新的材料（兜底）
+    var lastId = urlMaterialId || null;
+    if (!lastId) { try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {} }
+
+    var restorePromise;
+    if (lastId) {
+      restorePromise = _idbGet(lastId).then(function (row) {
+        if (row && row.material && row.material.sentences && row.material.sentences.length && row.audioBlob) {
+          state.activeMaterialId = lastId;
+          var url = URL.createObjectURL(row.audioBlob);
+          loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+          return true;
+        }
+        return false;
+      }).catch(function () { return false; });
+    } else {
+      restorePromise = Promise.resolve(false);
+    }
+
+    // 兜底：没有上次记录时，取最新的一条
+    restorePromise.then(function (restored) {
+      if (restored) return true;
+      return _idbGetAll().then(function (rows) {
+        if (!rows || !rows.length) return false;
+        rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+        var latest = rows[0];
+        if (latest && latest.material && latest.material.sentences && latest.material.sentences.length && latest.audioBlob) {
+          state.activeMaterialId = latest.id;
+          var url = URL.createObjectURL(latest.audioBlob);
+          loadMaterial(latest.material, { url: url, name: (latest.material.meta && latest.material.meta.audio) || "audio" });
+          return true;
+        }
+        return false;
+      });
+    }).then(function () {
+      // URL 带 play=N：自动跳到指定句播放（来自生词本/材料库的「听原句」跳转）
+      if (!isNaN(urlPlayIdx) && state.sentences && state.sentences[urlPlayIdx]) {
+        var doPlay = function () {
+          playSentence(urlPlayIdx);
+          // 清掉 URL 上的 play 参数，避免刷新再次触发
+          try {
+            var u = new URL(window.location.href);
+            u.searchParams.delete("play");
+            window.history.replaceState({}, "", u.pathname + (u.search ? u.search : "") + u.hash);
+          } catch (_) {}
+        };
+        // 等音频 metadata 加载完再 seek，否则 currentTime 会失败
+        if (audio.readyState >= 1) doPlay();
+        else audio.addEventListener("loadedmetadata", doPlay, { once: true });
+      } else if (urlMaterialId) {
+        // 来源是材料库：仅清掉 URL 上的 material 参数
+        try {
+          var u2 = new URL(window.location.href);
+          u2.searchParams.delete("material");
+          window.history.replaceState({}, "", u2.pathname + (u2.search ? u2.search : "") + u2.hash);
+        } catch (_) {}
+      }
+    }).catch(function () {});
+  });
+
+  // ---------- 生词本 ----------
+  const vocabOverlay = document.getElementById("vocab-overlay");
+  const vocabPanel = document.getElementById("vocab-panel");
+  const vocabBody = document.getElementById("vocab-body");
+  const vocabCount = document.getElementById("vocab-count");
+  const selPopup = document.getElementById("sel-popup");
+
+  state.vocab = []; // [{word, note, example, srcSentenceIdx, srcText, createdAt}]
+
+  function loadVocab() {
+    try { state.vocab = JSON.parse(localStorage.getItem(lsKey("vocab")) || "[]"); } catch (_) { state.vocab = []; }
+    state.vocab.forEach(normalizeVocabItem); // 补全复习调度字段（旧数据兼容）
+    // 自动修复：对缺失 srcSentenceIdx 的旧词条，尝试匹配到包含该词的句子
+    if (state.sentences && state.sentences.length > 0) {
+      var repaired = 0;
+      for (var vi = 0; vi < state.vocab.length; vi++) {
+        var v = state.vocab[vi];
+        if (v.srcSentenceIdx == null || isNaN(v.srcSentenceIdx) || !state.sentences[v.srcSentenceIdx]) {
+          // 模糊匹配：找第一个包含该单词（不区分大小写）的句子
+          var wordLower = (v.word || "").toLowerCase().trim();
+          if (!wordLower) continue;
+          for (var si = 0; si < state.sentences.length; si++) {
+            if (state.sentences[si].text.toLowerCase().indexOf(wordLower) !== -1) {
+              v.srcSentenceIdx = si;
+              v.srcText = state.sentences[si].text;
+              repaired++;
+              break;
+            }
+          }
+        }
+      }
+      if (repaired > 0) {
+        saveVocab(); // 保存修复结果
+        console.log("[Shadowing] 生词本自动修复: " + repaired + " 条词条补全了来源句子索引");
+      }
+    }
+    updateVocabBadge();
+  }
+  function saveVocab() {
+    try { localStorage.setItem(lsKey("vocab"), JSON.stringify(state.vocab)); } catch (_) {}
+    if (typeof syncUploadVocabDebounced === "function") syncUploadVocabDebounced();
+  }
+  function vocabKey() { return lsKey("vocab"); }
+
+  // ---------- 艾宾浩斯遗忘曲线复习调度 ----------
+  // 复习间隔（分钟）：5分钟 → 30分钟 → 12小时 → 1天 → 2天 → 4天 → 7天 → 15天
+  var REVIEW_INTERVALS = [5, 30, 12 * 60, 24 * 60, 2 * 24 * 60, 4 * 24 * 60, 7 * 24 * 60, 15 * 24 * 60];
+  var MASTERED_MAINTAIN_MIN = 30 * 24 * 60; // 已掌握后的维护复习间隔（30 天）
+  var MIN_MS = 60000;
+
+  // 旧数据兼容：补全复习字段（新词默认立即进入待复习队列）
+  function normalizeVocabItem(v) {
+    if (v.level == null || isNaN(v.level)) v.level = 0;
+    if (v.reps == null || isNaN(v.reps)) v.reps = 0;
+    if (!v.createdAt) v.createdAt = new Date().toISOString();
+    if (!v.due || isNaN(v.due)) v.due = Date.parse(v.createdAt) || Date.now();
+    if (v.lastReview === undefined) v.lastReview = null;
+    if (v.lastGrade === undefined) v.lastGrade = null;
+    return v;
+  }
+  function isDue(v) { return (v.due || 0) <= Date.now(); }
+  function isMastered(v) { return (v.level || 0) >= REVIEW_INTERVALS.length; }
+  function dueVocab() { return state.vocab.filter(isDue); }
+  function intervalLabel(min) {
+    if (min < 60) return min + " 分钟";
+    if (min < 1440) return (min / 60) + " 小时";
+    return Math.round(min / 1440) + " 天";
+  }
+  // 下次复习时间的人性化描述
+  function nextDueLabel(v) {
+    if (isDue(v)) return "待复习";
+    var ms = (v.due || 0) - Date.now();
+    if (ms < 3600000) return Math.max(1, Math.round(ms / MIN_MS)) + " 分钟后";
+    if (ms < 86400000) return Math.max(1, Math.round(ms / 3600000)) + " 小时后";
+    return Math.max(1, Math.round(ms / 86400000)) + " 天后";
+  }
+  // 复习评分：'good' 进入下一阶段（间隔递增）；'again' 回到第一阶段并稍后重练
+  function scheduleWord(v, grade) {
+    var now = Date.now();
+    v.lastReview = now;
+    if (grade === "good") {
+      v.reps = (v.reps || 0) + 1;
+      v.level = (v.level || 0) + 1;
+      var iv = v.level >= REVIEW_INTERVALS.length ? MASTERED_MAINTAIN_MIN : REVIEW_INTERVALS[v.level];
+      v.due = now + iv * MIN_MS;
+      v.lastGrade = "good";
+    } else {
+      v.level = 0;
+      v.reps = 0;
+      v.due = now + REVIEW_INTERVALS[0] * MIN_MS; // 5 分钟后重新进入队列
+      v.lastGrade = "again";
+    }
+  }
+  // 词条复习状态徽章（文案 + 样式类）
+  function vocabStatusChip(v, i) {
+    var cls, label;
+    if (isMastered(v)) { cls = "mastered"; label = "🌟 已掌握 · " + nextDueLabel(v); }
+    else if (isDue(v)) { cls = "due"; label = "🔴 待复习"; }
+    else if ((v.level || 0) >= 3) { cls = "solid"; label = "🟠 巩固中 · " + nextDueLabel(v); }
+    else { cls = "ok"; label = "🔵 第 " + (v.level + 1) + "/" + REVIEW_INTERVALS.length + " 阶 · " + nextDueLabel(v); }
+    return '<button class="vp-status ' + cls + '" data-rid="' + i + '" title="点击单独复习这个词">' + label + "</button>";
+  }
+  // 刷新工具栏角标 + 头部复习按钮
+  function updateVocabBadge() {
+    var due = dueVocab().length;
+    var badge = document.getElementById("vocab-due-badge");
+    if (badge) {
+      badge.textContent = due > 0 ? String(due) : "";
+      badge.style.display = due > 0 ? "inline-flex" : "none";
+    }
+    var rb = document.getElementById("vocab-review");
+    if (rb) {
+      if (state.reviewing) { rb.disabled = true; rb.textContent = "复习中…"; }
+      else { rb.disabled = due === 0; rb.textContent = due > 0 ? "🔁 复习 " + due : "🔁 复习"; }
+    }
+  }
+
+  // 渲染生词本面板
+  function renderVocab(showForm, prefill) {
+    if (state.reviewing) { renderReview(); vocabCount.textContent = state.vocab.length + " 个词"; return; }
+    if (!showForm && state.vocab.length === 0) {
+      vocabBody.innerHTML = '<div class="vp-empty">还没有收藏的生词<br><small>选中句子里的文字，点击「+ 加入生词本」</small></div>';
+    } else {
+      let html = "";
+      if (showForm) {
+        html += '<div class="vp-add-form" id="vp-form">' +
+          '<label>📝 新增生词</label>' +
+          '<input id="vp-word" placeholder="单词" value="' + escapeHtml(prefill.word || "") + '" />' +
+          '<textarea id="vp-note" placeholder="释义 / 笔记（可选）">' + escapeHtml(prefill.note || "") + '</textarea>' +
+          '<textarea id="vp-example" placeholder="例句（可选）">' + escapeHtml(prefill.example || "") + '</textarea>' +
+          '<div class="vp-form-row"><button id="vp-save" class="btn-primary">保存</button><button id="vp-cancel">取消</button></div></div>';
+      }
+      // 到期待复习的词优先展示（遗忘曲线：到期即置顶）
+      var order = state.vocab.map(function (_v, i) { return i; });
+      order.sort(function (a, b) {
+        var va = state.vocab[a], vb = state.vocab[b];
+        var da = isDue(va) ? 0 : 1, db = isDue(vb) ? 0 : 1;
+        if (da !== db) return da - db;
+        return (va.due || 0) - (vb.due || 0);
+      });
+      order.forEach(function (i) {
+        var v = state.vocab[i];
+        // 获取来源句子的原文（用于显示和校验索引有效性）
+        var srcLabel = "来自第 ? 句";
+        var srcTextPreview = "";
+        if (v.srcSentenceIdx != null && !isNaN(v.srcSentenceIdx) && state.sentences[v.srcSentenceIdx]) {
+          srcLabel = "📌 第 " + (v.srcSentenceIdx + 1) + " 句";
+          srcTextPreview = state.sentences[v.srcSentenceIdx].text;
+        }
+        html += '<div class="vp-item" data-key="' + i + '">' +
+          '<div class="vp-word">' + escapeHtml(v.word) + "</div>" +
+          vocabStatusChip(v, i) +
+          (v.note ? '<div class="vp-note">' + escapeHtml(v.note) + "</div>" : "") +
+          (v.example ? '<div class="vp-example">"' + escapeHtml(v.example) + '"</div>' : "") +
+          '<div class="vp-src" data-idx="' + (v.srcSentenceIdx != null ? v.srcSentenceIdx : "") + '" title="' + escapeHtml(srcTextPreview) + '">' + srcLabel +
+          (srcTextPreview ? ' <span class="vp-src-txt">— ' + escapeHtml(srcTextPreview.length > 50 ? srcTextPreview.slice(0, 50) + "…" : srcTextPreview) + "</span>" : "") +
+          "</div>" +
+          '<div class="vp-actions">' +
+            '<button data-edit="' + i + '">✎ 编辑</button>' +
+            '<button data-del="' + i + '" class="del">删除</button>' +
+          '</div></div>';
+      });
+      vocabBody.innerHTML = html;
+
+      // 绑定事件
+      if (showForm) {
+        document.getElementById("vp-save").addEventListener("click", function () {
+          const word = document.getElementById("vp-word").value.trim();
+          if (!word) { toast("请输入单词"); return; }
+          state.vocab.push({
+            word: word,
+            note: document.getElementById("vp-note").value.trim(),
+            example: document.getElementById("vp-example").value.trim(),
+            srcSentenceIdx: prefill.srcSentenceIdx != null ? prefill.srcSentenceIdx : null,
+            srcText: prefill.srcText || "",
+            createdAt: new Date().toISOString(),
+            level: 0, reps: 0, due: Date.now(), lastReview: null, lastGrade: null, // 新词立即进入复习队列
+          });
+          saveVocab();
+          renderVocab(false);
+          renderList(); // 同步刷新原文高亮
+          toast("已加入生词本：" + word);
+        });
+        document.getElementById("vp-cancel").addEventListener("click", function () { renderVocab(false); });
+        // 自动聚焦
+        var wInput = document.getElementById("vp-word");
+        if (wInput && !wInput.value) wInput.focus();
+        else if (document.getElementById("vp-note")) document.getElementById("vp-note").focus();
+      }
+
+      // 删除按钮
+      vocabBody.querySelectorAll("[data-del]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const idx = parseInt(btn.dataset.del, 10);
+          const w = state.vocab[idx] ? state.vocab[idx].word : "";
+          state.vocab.splice(idx, 1);
+          saveVocab();
+          renderVocab(false);
+          renderList(); // 同步刷新原文高亮
+          toast("已删除：" + w);
+        });
+      });
+
+      // 编辑按钮：把词条切换为 inline 编辑表单
+      vocabBody.querySelectorAll("[data-edit]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const idx = parseInt(btn.dataset.edit, 10);
+          enterVocabEditPanelMode(idx);
+        });
+      });
+
+      // 点击状态徽章 → 单独复习这个词
+      vocabBody.querySelectorAll(".vp-status[data-rid]").forEach(function (el) {
+        el.addEventListener("click", function () {
+          const idx = parseInt(el.dataset.rid, 10);
+          if (isNaN(idx) || !state.vocab[idx]) return;
+          state.reviewing = true;
+          state.reviewQueue = [state.vocab[idx]];
+          state.reviewPos = 0;
+          renderVocab(false);
+        });
+      });
+
+      // 点击来源跳转到对应句子
+      vocabBody.querySelectorAll(".vp-src[data-idx]").forEach(function (el) {
+        el.addEventListener("click", function () {
+          var idxStr = el.dataset.idx;
+          if (idxStr === "" || idxStr == null) return;
+          var idx = parseInt(idxStr, 10);
+          if (isNaN(idx)) return;
+          // 先关闭面板（等 CSS 过渡完成），再跳转播放
+          closeVocab();
+          setTimeout(function () {
+            if (state.sentences && state.sentences[idx]) {
+              playSentence(idx);
+              toast("跳转到第 " + (idx + 1) + " 句");
+            } else {
+              toast("该句子不存在（可能已更换材料）");
+            }
+          }, 350);
+        });
+      });
+    }
+    vocabCount.textContent = state.vocab.length + " 个词";
+    updateVocabBadge();
+  }
+
+  // 把某条词条切换为 inline 编辑表单（侧栏生词本）
+  function enterVocabEditPanelMode(idx) {
+    var card = vocabBody.querySelector('.vp-item[data-key="' + idx + '"]');
+    if (!card) return;
+    var v = state.vocab[idx];
+    if (!v) return;
+    var note = v.note || "";
+    var example = v.example || "";
+    card.innerHTML =
+      '<div class="vp-word">' + escapeHtml(v.word) + "</div>" +
+      '<div class="vp-edit-form">' +
+        '<label>释义 / 笔记</label>' +
+        '<textarea data-edit-note rows="2" placeholder="释义 / 笔记（可选）">' + escapeHtml(note) + '</textarea>' +
+        '<label>例句</label>' +
+        '<textarea data-edit-example rows="2" placeholder="例句（可选）">' + escapeHtml(example) + '</textarea>' +
+        '<div class="vp-edit-actions">' +
+          '<button data-edit-save>✓ 保存</button>' +
+          '<button data-edit-cancel>取消</button>' +
+        '</div>' +
+      '</div>';
+    var noteEl = card.querySelector("[data-edit-note]");
+    if (noteEl) noteEl.focus();
+
+    card.querySelector("[data-edit-save]").addEventListener("click", function () {
+      var cur = state.vocab[idx];
+      if (!cur) return;
+      cur.note = card.querySelector("[data-edit-note]").value.trim();
+      cur.example = card.querySelector("[data-edit-example]").value.trim();
+      saveVocab();
+      renderVocab(false);
+      renderList(); // 同步刷新原文高亮
+      toast("已保存修改");
+    });
+    card.querySelector("[data-edit-cancel]").addEventListener("click", function () {
+      renderVocab(false);
+    });
+  }
+
+  function escapeHtml(s) {
+    if (!s) return "";
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /**
+   * 把句子文本里的生词包成高亮 span。
+   * 按单词边界整词匹配（忽略大小写），vocab 词按长度降序避免子串优先。
+   * 返回 HTML 字符串（已转义）。
+   */
+  function highlightVocab(text) {
+    if (!text) return "";
+    if (!state.vocab || state.vocab.length === 0) return escapeHtml(text);
+
+    // 建立 lowercased word -> 第一个匹配的 vocab 索引
+    const map = {};
+    state.vocab.forEach(function (v, idx) {
+      const w = (v.word || "").trim().toLowerCase();
+      if (w && !(w in map)) map[w] = idx;
+    });
+    const keys = Object.keys(map);
+    if (keys.length === 0) return escapeHtml(text);
+
+    // 按长度降序，长词优先（避免 "art" 抢在 "article" 前）
+    keys.sort(function (a, b) { return b.length - a.length; });
+
+    // 用正则把文本切成「词」和「非词」片段，逐段处理
+    const tokens = text.split(/(\b[\w']+\b)/g);
+    let html = "";
+    for (let t = 0; t < tokens.length; t++) {
+      const tok = tokens[t];
+      if (tok === "") continue;
+      const low = tok.toLowerCase();
+      if (map[low] !== undefined) {
+        html += '<span class="vocab-hl" data-vid="' + map[low] + '">' + escapeHtml(tok) + "</span>";
+      } else {
+        html += escapeHtml(tok);
+      }
+    }
+    return html;
+  }
+
+  // ---------- 复习会话（闪卡模式） ----------
+  state.reviewing = false;
+  state.reviewQueue = [];
+  state.reviewPos = 0;
+  state.reviewStats = { good: 0, again: 0 };
+
+  function startReview() {
+    var q = dueVocab();
+    if (q.length === 0) { toast("当前没有到期待复习的词 🎉"); return; }
+    state.reviewing = true;
+    state.reviewQueue = q.slice();
+    state.reviewPos = 0;
+    state.reviewStats = { good: 0, again: 0 };
+    renderVocab(false);
+  }
+
+  function renderReview() {
+    updateVocabBadge();
+    if (state.reviewPos >= state.reviewQueue.length) {
+      // 本轮完成
+      vocabBody.innerHTML =
+        '<div class="vp-review-done">🎉 本轮复习完成！<small>共 ' + (state.reviewStats.good + state.reviewStats.again) +
+        " 个词 · 记得 " + state.reviewStats.good + " · 忘了 " + state.reviewStats.again + "</small></div>" +
+        '<div class="rv-actions" style="margin-top:8px"><button id="rv-done-exit" class="btn-primary">返回生词本</button></div>';
+      document.getElementById("rv-done-exit").addEventListener("click", exitReview);
+      return;
+    }
+    var v = state.reviewQueue[state.reviewPos];
+    var total = state.reviewQueue.length;
+    var pos = state.reviewPos + 1;
+    var stageTxt = isMastered(v) ? "已掌握 · 维护复习" : "第 " + ((v.level || 0) + 1) + " / " + REVIEW_INTERVALS.length + " 阶";
+    vocabBody.innerHTML =
+      '<div class="vp-review">' +
+        '<div class="rv-progress">复习进度 ' + pos + " / " + total + "</div>" +
+        '<div class="vp-flashcard">' +
+          '<div class="fc-word">' + escapeHtml(v.word) + "</div>" +
+          '<div class="fc-stage">' + stageTxt + "</div>" +
+          '<div class="fc-answer" id="fc-answer" style="display:none">' +
+            (v.note ? '<div class="fc-note">' + escapeHtml(v.note) + "</div>" : "") +
+            (v.example ? '<div class="fc-example">"' + escapeHtml(v.example) + '"</div>' : "") +
+            (v.srcSentenceIdx != null && !isNaN(v.srcSentenceIdx) && state.sentences[v.srcSentenceIdx]
+              ? '<button class="rv-src" data-idx="' + v.srcSentenceIdx + '">▶ 听原句（第 ' + (v.srcSentenceIdx + 1) + " 句）</button>"
+              : "") +
+          "</div>" +
+        "</div>" +
+        '<div class="rv-actions">' +
+          '<button id="rv-show" class="rv-show">👀 显示答案</button>' +
+          '<button id="rv-again" class="rv-again" style="display:none">✗ 忘了</button>' +
+          '<button id="rv-good" class="rv-good" style="display:none">✓ 记得</button>' +
+        "</div>" +
+        '<button id="rv-exit" class="rv-exit">退出复习</button>' +
+      "</div>";
+
+    var showBtn = document.getElementById("rv-show");
+    var ans = document.getElementById("fc-answer");
+    var goodBtn = document.getElementById("rv-good");
+    var againBtn = document.getElementById("rv-again");
+    showBtn.addEventListener("click", function () {
+      ans.style.display = "block";
+      showBtn.style.display = "none";
+      goodBtn.style.display = ""; againBtn.style.display = "";
+    });
+    goodBtn.addEventListener("click", function () { answerReview(v, "good"); });
+    againBtn.addEventListener("click", function () { answerReview(v, "again"); });
+    document.getElementById("rv-exit").addEventListener("click", exitReview);
+    var srcBtn = vocabBody.querySelector(".rv-src");
+    if (srcBtn) {
+      srcBtn.addEventListener("click", function () {
+        var idx = parseInt(srcBtn.dataset.idx, 10);
+        if (state.sentences && state.sentences[idx]) playSentence(idx);
+      });
+    }
+  }
+
+  function answerReview(v, grade) {
+    scheduleWord(v, grade);
+    saveVocab(); // 复习记录持久化
+    state.reviewStats[grade === "good" ? "good" : "again"]++;
+    state.reviewPos++;
+    renderReview();
+  }
+
+  function exitReview() {
+    state.reviewing = false;
+    state.reviewQueue = [];
+    state.reviewPos = 0;
+    renderVocab(false);
+  }
+
+  function openVocab(optShowForm, optPrefill) {
+    vocabOverlay.classList.add("show");
+    vocabPanel.classList.add("open");
+    vocabOverlay.setAttribute("aria-hidden", "false");
+    vocabPanel.setAttribute("aria-hidden", "false");
+    renderVocab(!!optShowForm, optPrefill || {});
+  }
+  function closeVocab() {
+    vocabOverlay.classList.remove("show");
+    vocabPanel.classList.remove("open");
+    vocabOverlay.setAttribute("aria-hidden", "true");
+    vocabPanel.setAttribute("aria-hidden", "true");
+  }
+
+  document.getElementById("btn-vocab").addEventListener("click", function () { openVocab(); });
+  document.getElementById("vocab-review").addEventListener("click", function () { startReview(); });
+  vocabOverlay.addEventListener("click", closeVocab);
+  document.getElementById("vocab-close").addEventListener("click", closeVocab);
+
+  // ---------- 生词高亮 + 笔记浮层 ----------
+  const vocabTip = document.getElementById("vocab-tip");
+  const vtWord = vocabTip.querySelector(".vt-word");
+  const vtNote = vocabTip.querySelector(".vt-note");
+  const vtExample = vocabTip.querySelector(".vt-example");
+  let tipPinned = false;
+
+  function showVocabTip(vid, anchorEl) {
+    const v = state.vocab[vid];
+    if (!v) return;
+    vtWord.innerHTML = "📖 " + escapeHtml(v.word);
+    vtNote.innerHTML = v.note ? escapeHtml(v.note) : '<span style="color:var(--muted)">（暂无笔记）</span>';
+    vtExample.innerHTML = v.example ? '"' + escapeHtml(v.example) + '"' : "";
+    vocabTip.classList.add("show");
+
+    // 强制回流确保 offsetHeight/Width 可用
+    void vocabTip.offsetHeight;
+
+    // 定位：fixed 定位用视口坐标（getBoundingClientRect 已是视口坐标，无需加 scrollOffset）
+    const r = anchorEl.getBoundingClientRect();
+    const tipH = vocabTip.offsetHeight || 90;
+    const tipW = vocabTip.offsetWidth || 240;
+    let left = r.left;
+    let top = r.bottom + 6;
+    // 水平防溢出视口
+    if (left + tipW > window.innerWidth - 8) {
+      left = window.innerWidth - tipW - 8;
+    }
+    if (left < 8) left = 8;
+    // 垂直：下方放不下就放上方
+    if (r.bottom + tipH + 12 > window.innerHeight) {
+      top = r.top - tipH - 6;
+    }
+    vocabTip.style.left = left + "px";
+    vocabTip.style.top = top + "px";
+  }
+  function hideVocabTip() {
+    vocabTip.classList.remove("show");
+    tipPinned = false;
+    document.querySelectorAll(".vocab-hl.active").forEach(function (el) { el.classList.remove("active"); });
+  }
+  // 浮层内点击不冒泡到 document 关闭
+  vocabTip.addEventListener("click", function (e) { e.stopPropagation(); });
+
+  // 列表内生词高亮：悬停预览、点击固定显示（不触发句子播放）
+  // 用 capture 阶段确保在 row 的 click 之前拦截
+  listEl.addEventListener("click", function (e) {
+    const hl = e.target.closest(".vocab-hl");
+    if (!hl) return;
+    e.stopPropagation();
+    e.preventDefault();
+    document.querySelectorAll(".vocab-hl.active").forEach(function (el) { el.classList.remove("active"); });
+    hl.classList.add("active");
+    showVocabTip(parseInt(hl.dataset.vid, 10), hl);
+    tipPinned = true;
+  }, true); // capture phase
+  // 悬停也预览（仅在未固定时）
+  listEl.addEventListener("mouseover", function (e) {
+    if (tipPinned) return;
+    const hl = e.target.closest(".vocab-hl");
+    if (!hl) return;
+    showVocabTip(parseInt(hl.dataset.vid, 10), hl);
+  }, true);
+  listEl.addEventListener("mouseout", function (e) {
+    if (tipPinned) return;
+    const hl = e.target.closest(".vocab-hl");
+    if (!hl) return;
+    if (!vocabTip.contains(e.relatedTarget)) hideVocabTip();
+  }, true);
+  // 点击空白处关闭固定浮层
+  document.addEventListener("click", function (e) {
+    if (tipPinned && !e.target.closest(".vocab-hl") && !vocabTip.contains(e.target)) hideVocabTip();
+  });
+
+  // ---------- 材料库面板 ----------
+  const libOverlay = document.getElementById("lib-overlay");
+  const libPanel = document.getElementById("lib-panel");
+  const libBody = document.getElementById("lib-body");
+  const libCount = document.getElementById("lib-count");
+
+  // 记录当前活跃的材料 ID（用于标记「正在使用」）
+  state.activeMaterialId = null;
+
+  function openLibrary() {
+    libOverlay.classList.add("show");
+    libPanel.classList.add("open");
+    renderLibrary();
+  }
+  function closeLibrary() {
+    libOverlay.classList.remove("show");
+    libPanel.classList.remove("open");
+  }
+
+  /** 渲染材料列表 */
+  function renderLibrary() {
+    _idbGetAll().then(function (rows) {
+      if (!rows || rows.length === 0) {
+        libBody.innerHTML = '<div class="vp-empty">还没有保存的材料<br><small>生成材料后会自动存到这里</small></div>';
+        libCount.textContent = "0 个材料";
+        return;
+      }
+      rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+      libCount.textContent = rows.length + " 个材料";
+
+      let html = "";
+      rows.forEach(function (row) {
+        var meta = row.material && row.material.meta ? row.material.meta : {};
+        var title = meta.title || row.id || "未命名";
+        var sentCount = row.material && row.material.sentences ? row.material.sentences.length : 0;
+        var isActive = (row.id === state.activeMaterialId);
+        var dateStr = row.updatedAt ? new Date(row.updatedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" }) : "";
+        html += '<div class="lib-item' + (isActive ? ' lib-active' : '') + '" data-id="' + escapeHtml(row.id) + '">' +
+          '<div class="lib-title">' + escapeHtml(title) + (isActive ? ' <span style="font-size:11px;color:var(--ok);font-weight:400;">(当前)</span>' : '') + '</div>' +
+          '<div class="lib-meta">' +
+            '<span>' + sentCount + ' 句</span>' +
+            '<span>' + (meta.audio || "") + '</span>' +
+            (dateStr ? '<span>' + dateStr + '</span>' : '') +
+          '</div>' +
+          '<div class="lib-actions">' +
+            (!isActive ? '<button data-switch="' + escapeHtml(row.id) + '" class="btn-primary" style="font-size:12px;padding:3px 10px;">切换到此材料</button>' : '') +
+            '<button data-del-lib="' + escapeHtml(row.id) + '" style="color:var(--rec)">删除</button>' +
+          '</div></div>';
+      });
+      libBody.innerHTML = html;
+
+      // 切换按钮
+      libBody.querySelectorAll("[data-switch]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var targetId = btn.dataset.switch;
+          switchToMaterial(targetId);
+        });
+      });
+
+      // 删除按钮
+      libBody.querySelectorAll("[data-del-lib]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var delId = btn.dataset.delLib;
+          if (delId === state.activeMaterialId) {
+            toast("不能删除当前正在使用的材料"); return;
+          }
+          _idbDelete(delId).then(function () {
+            toast("已删除");
+            renderLibrary();
+          }).catch(function () {});
+        });
+      });
+    }).catch(function () {
+      libBody.innerHTML = '<div class="vp-empty">加载失败</div>';
+    });
+  }
+
+  /** 切换到指定材料（从 IndexedDB 恢复） */
+  function switchToMaterial(id) {
+    _idbGet(id).then(function (row) {
+      if (!row || !row.material) { toast("材料数据不完整"); return; }
+      var url = URL.createObjectURL(row.audioBlob);
+      loadMaterial(row.material, {
+        url: url,
+        name: (row.material.meta && row.material.meta.audio) || "audio",
+        blob: row.audioBlob,
+      });
+      state.activeMaterialId = id;
+      // 记住最后使用的材料 ID
+      try { localStorage.setItem("shadowing:lastMaterialId", id); } catch (_) {}
+      closeLibrary();
+      toast("已切换到：" + (row.material.meta.title || id));
+    }).catch(function (err) {
+      console.error(err);
+      toast("切换失败");
+    });
+  }
+
+  // 「材料库」按钮已移到顶部导航（library.html 独立页面），不再保留侧栏触发器
+  libOverlay.addEventListener("click", closeLibrary);
+  document.getElementById("lib-close").addEventListener("click", closeLibrary);
+
+  // loadMaterial 时更新 activeMaterialId（已合并到下方统一包装器中）
+
+  // 选中文字 → 弹出「+ 生词」按钮
+  let selTimer = null;
+  document.addEventListener("mouseup", function (e) {
+    if (window.state && window.state.editMode) { hideSelPopup(); return; }
+    // 延迟一点等 selection 更新
+    clearTimeout(selTimer);
+    selTimer = setTimeout(function () {
+      const sel = window.getSelection();
+      const txt = sel.toString().trim();
+      // 必须是在句子列表区域内的选中，且选中的是有效文本
+      if (txt.length < 1 || txt.length > 80) { hideSelPopup(); return; }
+      const range = sel.getRangeAt(0);
+      const container = range.commonAncestorContainer;
+      const rowEl = container.nodeType === 1 ? container.closest(".row") : container.parentElement ? container.parentElement.closest(".row") : null;
+      if (!rowEl) { hideSelPopup(); return; }
+
+      // 计算位置：在选区末尾附近显示
+      const rect = range.getBoundingClientRect();
+      selPopup.style.left = (rect.right + window.scrollX - 4) + "px";
+      selPopup.style.top = (rect.bottom + window.scrollY + 6) + "px";
+      selPopup.classList.add("show");
+      // 记录来源句子索引
+      selPopup._srcIdx = parseInt(rowEl.dataset.id, 10);
+      selPopup._srcText = txt;
+    }, 10);
+  });
+
+  function hideSelPopup() { selPopup.classList.remove("show"); selPopup._srcIdx = null; selPopup._srcText = ""; }
+  document.addEventListener("mousedown", function (e) {
+    if (e.target !== selPopup) hideSelPopup();
+  });
+
+  selPopup.addEventListener("click", function () {
+    // 先捕获值，再隐藏弹窗（hideSelPopup 会清空 _srcIdx）
+    const word = selPopup._srcText || "";
+    const srcIdx = selPopup._srcIdx;
+    const srcTxt = selPopup._srcText || "";
+    hideSelPopup();
+    openVocab(true, {
+      word: word,
+      srcSentenceIdx: srcIdx,
+      srcText: srcTxt,
+    });
+  });
+
+  // 载入材料时同步加载生词 + 更新 activeMaterialId
+  const _origLoadMaterial = window.loadMaterial;
+  window.loadMaterial = function (jsonObj, audioSrc) {
+    _origLoadMaterial(jsonObj, audioSrc);
+    state.activeMaterialId = state.materialId;
+    try { localStorage.setItem("shadowing:lastMaterialId", state.materialId); } catch (_) {}
+  };
+
+  // ---------- 键盘快捷键 ----------
+  document.addEventListener("keydown", function (e) {
+    if (e.target.matches("input, textarea")) return;
+    const i = state.playingIndex != null ? state.playingIndex : state.lastIndex;
+    switch (e.key) {
+      case " ":
+        e.preventDefault();
+        togglePlayPause();
+        break;
+      case "ArrowRight": e.preventDefault(); playSentence(i + 1); break;
+      case "ArrowLeft": e.preventDefault(); playSentence(i - 1); break;
+      case "l": case "L": btnLoop.click(); break;
+      case "s": case "S":
+        if (listEl.children[i]) toggleHard(i, listEl.children[i].querySelector(".icon-hard")); break;
+      case "r": case "R":
+        if (listEl.children[i]) toggleRecord(i, listEl.children[i].querySelector(".icon-rec")); break;
+    }
+  });
+})();
+</script>
+
+<!-- ==================== 浏览器端对齐引擎（Whisper WASM + pdf.js）==================== -->
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
+
+// 配置 transformers.js 使用本地缓存
+env.allowLocalModels = false;
+env.useBrowserCache = true;
+
+const STATUS = document.getElementById("mk-status");
+const PROGRESS_WRAP = document.getElementById("mk-progress-wrap");
+const PROGRESS_BAR = document.getElementById("mk-progress-bar");
+const BTN_RUN = document.getElementById("mk-run");
+
+/** 状态报告 */
+function setStatus(msg) { STATUS.textContent = msg; }
+function setProgress(pct) {
+  PROGRESS_WRAP.classList.add("show");
+  PROGRESS_BAR.style.width = Math.min(100, Math.max(0, pct)) + "%";
+}
+function hideProgress() { PROGRESS_WRAP.classList.remove("show"); }
+
+/** 用 pdf.js 从 PDF File 提取纯文本 */
+async function extractPdfText(pdfFile) {
+  const pdfjsLib = await import(
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs"
+  );
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs";
+
+  const arrayBuffer = await pdfFile.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(function (item) { return item.str; }).join(" ");
+    fullText += pageText + "\n";
+  }
+  return fullText;
+}
+
+/** 拆分句子（与 align.py 保持一致的去噪规则） */
+function splitSentences(raw) {
+  const lines = raw.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+  const result = [];
+  for (const line of lines) {
+    // 跳过纯数字行（页码）
+    if (/^\d+$/.test(line)) continue;
+    // 按标点拆分
+    const parts = line.split(/(?<=[.!?…])\s+/);
+    for (const p of parts) {
+      const s = p.trim();
+      if (s.length < 3) continue;
+      result.push(s);
+    }
+  }
+  return result;
+}
+
+/**
+ * 路径 A：chunks（词/短语级时间戳）→ 聚合成跟读句子。
+ *
+ * 策略：
+ *  1. 把所有 chunks 拼成完整文本流，记录每个 chunk 的字符位置区间
+ *  2. 先按 .!? 切分出「自然句」
+ *  3. 对超过 MAX_WORDS_PER_SENTENCE 的长句，按逗号/分号/连词二次切分
+ *     （跟读场景下每句太长不好练，20 词左右最合适）
+ *  4. 对每句话，反查覆盖了哪些 chunks → 取首尾 chunk 的时间戳
+ */
+var MAX_WORDS_PER_SENTENCE = 22; // 每句最大词数，超长自动在逗号处切开
+
+function joinWordsToSentences(chunks) {
+  var round3 = function (x) { return Math.round(x * 1000) / 1000; };
+
+  // Step 1: 构建完整文本流（包含所有 chunk 文字，不遗漏）
+  // 同时记录每个 chunk 的字符位置区间和时间戳
+  var fullTextParts = [];
+  var chunkPositions = [];
+  var pos = 0;
+  for (var ci = 0; ci < chunks.length; ci++) {
+    var c = chunks[ci];
+    var w = (c.text || "").trim();
+    if (!w) continue;
+    var hasTs = !!(c.timestamp && Array.isArray(c.timestamp) && c.timestamp.length >= 2);
+    var start = pos;
+    if (pos > 0) { fullTextParts.push(" "); pos += 1; }
+    fullTextParts.push(w);
+    pos += w.length;
+    chunkPositions.push({
+      text: w,
+      charStart: start,
+      charEnd: pos,
+      tsStart: hasTs ? c.timestamp[0] : null,
+      tsEnd: hasTs ? c.timestamp[1] : null,
+      hasTs: hasTs,
+    });
+  }
+  var fullText = fullTextParts.join("");
+
+  // Step 1.5: 对没有时间戳的 chunk，从相邻有效 chunk 插值填补
+  // 找到前后最近的有效时间戳，按字符位置线性插值
+  var lastValidIdx = -1;
+  for (var i = 0; i < chunkPositions.length; i++) {
+    if (chunkPositions[i].hasTs) { lastValidIdx = i; continue; }
+    if (lastValidIdx === -1) {
+      // 前面还没有有效的，往后找第一个有效的
+      var nextValid = -1;
+      for (var j = i + 1; j < chunkPositions.length; j++) {
+        if (chunkPositions[j].hasTs) { nextValid = j; break; }
+      }
+      if (nextValid === -1) continue; // 完全没有时间戳，无法插值
+      // 把当前及中间所有无效 chunk 都设为 nextValid 的 start（偏早一点）
+      for (var k = i; k < nextValid; k++) {
+        chunkPositions[k].tsStart = chunkPositions[nextValid].tsStart - 0.5;
+        chunkPositions[k].tsEnd = chunkPositions[nextValid].tsStart - 0.1;
+      }
+      i = nextValid - 1; // 跳到已处理的位置
+      lastValidIdx = nextValid;
+    } else {
+      // 前后有有效值，线性插值
+      var prev = chunkPositions[lastValidIdx];
+      // 往后找下一个有效
+      var nextV = -1;
+      for (var nxi = i + 1; nxi < chunkPositions.length; nxi++) {
+        if (chunkPositions[nxi].hasTs) { nextV = nxi; break; }
+      }
+      if (nextV === -1) {
+        // 后面没有了，用前一个的 end 延伸
+        var gapChars = chunkPositions[i].charStart - prev.charEnd;
+        var totalGapChars = chunkPositions[chunkPositions.length - 1].charEnd - prev.charEnd;
+        var ratio = totalGapChars > 0 ? gapChars / totalGapChars : 0.5;
+        chunkPositions[i].tsStart = prev.tsEnd + ratio * 0.8;
+        chunkPositions[i].tsEnd = prev.tsEnd + ratio * 1.2;
+      } else {
+        var nxt = chunkPositions[nextV];
+        var gStart = chunkPositions[i].charStart;
+        var gEnd = chunkPositions[i].charEnd;
+        var pStart = prev.charStart;
+        var nStart = nxt.charStart;
+        var tRange = nxt.tsStart - prev.tsEnd;
+        var cRange = nStart - pStart;
+        if (cRange > 0 && tRange > 0) {
+          var r1 = (gStart - pStart) / cRange;
+          var r2 = (gEnd - pStart) / cRange;
+          chunkPositions[i].tsStart = prev.tsEnd + r1 * tRange;
+          chunkPositions[i].tsEnd = prev.tsEnd + r2 * tRange;
+        } else {
+          chunkPositions[i].tsStart = prev.tsEnd + 0.15;
+          chunkPositions[i].tsEnd = prev.tsEnd + 0.4;
+        }
+      }
+    }
+  }
+
+  // Step 2: 按句末标点切出「自然句」
+  var rawSpans = []; // {charStart, charEnd}
+  var re = /[^.!?]*[.!?]+/g;
+  var m;
+  while ((m = re.exec(fullText)) !== null) {
+    var s = m[0].trim();
+    if (s.length >= 2) rawSpans.push({ charStart: m.index, charEnd: m.index + m[0].length });
+  }
+
+  // 如果没有任何标点，整个文本当一句
+  if (rawSpans.length === 0 && fullText.length > 0) {
+    rawSpans.push({ charStart: 0, charEnd: fullText.length });
+  }
+
+  // Step 3: 对超长句二次切分（在逗号/分号/连词处断开）
+  var finalSpans = [];
+  for (var si = 0; si < rawSpans.length; si++) {
+    var span = rawSpans[si];
+    var sentText = fullText.slice(span.charStart, span.charEnd);
+    var wordCount = sentText.split(/\s+/).filter(Boolean).length;
+
+    if (wordCount <= MAX_WORDS_PER_SENTENCE) {
+      finalSpans.push(span); // 短句直接保留
+    } else {
+      // 二次切分：找所有可断点（逗号、分号、连词开头的 chunk）
+      var subSpans = splitLongSentence(fullText, span.charStart, span.charEnd, chunkPositions, MAX_WORDS_PER_SENTENCE);
+      for (var k = 0; k < subSpans.length; k++) finalSpans.push(subSpans[k]);
+    }
+  }
+
+  // Step 4: 对每个最终句子，反查 chunks → 取时间戳（带防截断 padding）
+  var out = [];
+  for (var fi = 0; fi < finalSpans.length; fi++) {
+    var fspan = finalSpans[fi];
+    var covered = chunkPositions.filter(function (cp) {
+      return !(cp.charEnd <= fspan.charStart || cp.charStart >= fspan.charEnd);
+    });
+    if (covered.length === 0) continue;
+
+    var ftext = fullText.slice(fspan.charStart, fspan.charEnd).replace(/\s+/g, " ").trim();
+    var sTime = covered[0].tsStart || 0;
+    var eTime = covered[covered.length - 1].tsEnd;
+
+    // 防截断策略：
+    // 1. 最短保证 0.5 秒（短句也需要听清）
+    // 2. 根据句子词数额外加 buffer（长句末尾词可能拖得久）
+    var wordCt = ftext.split(/\s+/).filter(Boolean).length;
+    var minDur = Math.max(0.5, 0.25 + wordCt * 0.06); // 每词约多给 60ms
+    var eTimePadded = Math.max(eTime || (sTime + minDur), sTime + minDur);
+
+    out.push({
+      text: ftext,
+      start: round3(sTime),
+      end: round3(eTimePadded),
+    });
+  }
+  return out.filter(function (s) { return s.end > s.start && s.text.length > 0; });
+}
+
+/**
+ * 将一个超长句子在合适的断点处切成多段。
+ * 断点优先级：分号 ; > 逗号 , > 连词开头（But/And/While/However/So/The 等）
+ * 每段目标不超过 maxWords 个词。
+ */
+function splitLongSentence(fullText, charStart, charEnd, chunkPositions, maxWords) {
+  var text = fullText.slice(charStart, charEnd);
+
+  // 找所有潜在断点的字符偏移（相对于 charStart）
+  var breakPoints = [0]; // 句首永远是断点
+
+  // 1. 分号
+  var idx = 0;
+  while ((idx = text.indexOf(";", idx)) !== -1) {
+    breakPoints.push(idx + 1); // 分号后断开
+    idx++;
+  }
+
+  // 2. 逗号（但不在数字/缩写内部的逗号）
+  idx = 0;
+  var commaRe = /,\s+/g;
+  var cm;
+  while ((cm = commaRe.exec(text)) !== null) {
+    breakPoints.push(cm.index + 1);
+  }
+
+  // 3. 连词/转折词开头的 chunk（这些词通常引出新从句）
+  var clauseStarters = /^(but|and|while|however|so|because|although|though|when|where|who|which|that|if|then|for|nor|yet|still|also|moreover|furthermore|nevertheless|otherwise)\b/i;
+  for (var ci = 0; ci < chunkPositions.length; ci++) {
+    var cp = chunkPositions[ci];
+    if (cp.charStart >= charStart && cp.charEnd <= charEnd) {
+      if (clauseStarters.test(cp.text) && cp.charStart > charStart) {
+        // 检查这个断点是否已存在（避免重复）
+        var relPos = cp.charStart - charStart;
+        if (breakPoints.indexOf(relPos) === -1) breakPoints.push(relPos);
+      }
+    }
+  }
+
+  breakPoints.push(text.length); // 句末
+  breakPoints.sort(function (a, b) { return a - b; });
+
+  // 按 breakPoints 切分，合并过短的片段到前一段
+  var segments = [];
+  var segStart = 0;
+  var segWordCount = 0;
+  for (var bi = 1; bi < breakPoints.length; bi++) {
+    var bp = breakPoints[bi];
+    var segmentText = text.slice(segStart, bp).replace(/^\s+/, "").replace(/\s+$/, "");
+    var segWords = segmentText.split(/\s+/).filter(Boolean).length;
+
+    if (segWordCount + segWords <= maxWords || segWordCount === 0) {
+      // 合并到当前段（还没超限）
+      segWordCount += segWords;
+    } else {
+      // 当前段已满，输出并开始新段
+      segments.push({ charStart: charStart + segStart, charEnd: charStart + (breakPoints[bi - 1] || segStart) });
+      segStart = breakPoints[bi - 1] || bp;
+      segWordCount = segWords;
+    }
+  }
+  // 最后一段
+  segments.push({ charStart: charStart + segStart, charEnd: charEnd });
+
+  return segments;
+}
+
+/**
+ * 路径 B：句级时间戳（segment 文本往往不以句号结尾）→ 把每段文本按内部标点切句，
+ * 并把该段时间按词数比例均摊到各子句。解决「4 个 segment → 只有 4 句」的问题。
+ */
+function splitSegmentsToSentences(segChunks) {
+  const round3 = function (x) { return Math.round(x * 1000) / 1000; };
+  const out = [];
+  for (const c of segChunks) {
+    const full = (c.text || "").replace(/\s+/g, " ").trim();
+    const ts = c.timestamp || [0, 0];
+    const start = ts[0], end = ts[1];
+    if (!full || end <= start) continue;
+    const parts = full.split(/(?<=[.!?])\s+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (parts.length === 0) continue;
+    if (parts.length === 1) {
+      var wCt1 = parts[0].split(/\s+/).length;
+      var minD1 = Math.max(0.5, 0.25 + wCt1 * 0.06);
+      out.push({ text: parts[0], start: round3(start), end: round3(Math.max(end, start + minD1)) });
+      continue;
+    }
+    const words = parts.map(function (p) { return p.split(/\s+/).length; });
+    const total = words.reduce(function (a, b) { return a + b; }, 0) || 1;
+    let t = start;
+    for (let i = 0; i < parts.length; i++) {
+      const dur = (words[i] / total) * (end - start);
+      const s = t, e = t + dur; t = e;
+      var wCi = parts[i].split(/\s+/).length;
+      var minDi = Math.max(0.5, 0.25 + wCi * 0.06);
+      out.push({ text: parts[i], start: round3(s), end: round3(Math.max(e, s + minDi)) });
+    }
+  }
+  return out.filter(function (s) { return s.end > s.start && s.text.length > 0; });
+}
+
+/**
+ * 路径 C：只有纯文本、没有任何时间戳 → 按句切分，并按词数比例把总时长均摊到各句。
+ */
+function splitTextToSentences(text, totalDuration) {
+  const round3 = function (x) { return Math.round(x * 1000) / 1000; };
+  const raw = (text || "").replace(/\s+/g, " ").trim();
+  const parts = raw.split(/(?<=[.!?])\s+/).map(function (s) { return s.trim(); }).filter(Boolean);
+  if (parts.length === 0) return [];
+  const words = parts.map(function (p) { return p.split(/\s+/).length; });
+  const total = words.reduce(function (a, b) { return a + b; }, 0) || 1;
+  let t = 0;
+  return parts.map(function (p, i) {
+    const dur = (words[i] / total) * totalDuration;
+    const s = t, e = t + dur; t = e;
+    var wCi = p.split(/\s+/).length;
+    var minDi = Math.max(0.5, 0.25 + wCi * 0.06);
+    return { text: p, start: round3(s), end: round3(Math.max(e, s + minDi)) };
+  });
+}
+
+/**
+ * 统一句子推导：chunks 优先（词/短语级时间戳最准）→ 句级 → 纯文本兜底。
+ */
+function deriveSentences(result, duration) {
+  // 1) chunks 路径（Whisper 返回的词/短语级时间戳，数量多、精度高）
+  //    不管每条几个词，直接用 joinWordsToSentences 按句末标点聚合即可
+  const rawChunks = result.chunks;
+  if (Array.isArray(rawChunks) && rawChunks.length > 0) {
+    const a = joinWordsToSentences(rawChunks);
+    if (a.length >= 2) return postProcessSentences(a, duration);
+  }
+  // 2) 句级（segment 文本块——仅当 chunks 不存在或太少时才走这里）
+  const segs = result.segments || (Array.isArray(rawChunks) ? rawChunks : null);
+  if (segs && segs.length) {
+    const segChunks = segs.map(function (seg) {
+      const text = seg.text || "";
+      const ts = (seg.timestamp && Array.isArray(seg.timestamp))
+        ? seg.timestamp
+        : (typeof seg.start === "number" ? [seg.start, seg.end || seg.start + 1] : [0, 0]);
+      return { text: text, timestamp: ts };
+    });
+    const a = splitSegmentsToSentences(segChunks);
+    if (a.length >= 2) return postProcessSentences(a, duration);
+  }
+  // 3) 纯文本兜底
+  if (result.text && duration > 0) {
+    return postProcessSentences(splitTextToSentences(result.text, duration), duration);
+  }
+  return [];
+}
+
+/**
+ * 后处理：检测间隙 / 防重叠 / 日志诊断
+ */
+function postProcessSentences(sents, totalDuration) {
+  if (!sents || sents.length === 0) return sents;
+
+  var round3 = function (x) { return Math.round(x * 1000) / 1000; };
+
+  // 按开始时间排序（理论上已有序，但保险起见）
+  sents.sort(function (a, b) { return a.start - b.start; });
+
+  // 防重叠：如果 padding 导致前后句时间交叉，以前句 end 为准
+  for (var i = 1; i < sents.length; i++) {
+    if (sents[i].start < sents[i - 1].end) {
+      // 后句开始被前句 padding 吃掉了 → 调整到前句 end + 小间隔
+      sents[i].start = round3(sents[i - 1].end + 0.05);
+    }
+  }
+
+  // 诊断：检测大间隙（> 3 秒的空白可能意味着漏识别）
+  var gapCount = 0;
+  var maxGap = 0;
+  for (var j = 1; j < sents.length; j++) {
+    var gap = sents[j].start - sents[j - 1].end;
+    if (gap > maxGap) maxGap = gap;
+    if (gap > 3) gapCount++;
+  }
+  if (gapCount > 0) {
+    console.warn("[Shadowing] ⚠️ 检测到 " + gapCount + " 处大间隙(>3s)，最大间隙 " +
+      round3(maxGap) + "s。这些位置可能有未识别出的语音内容。" +
+      "\n建议：生成后逐句检查，如发现连续缺失可尝试用更大的 Whisper 模型。");
+  }
+
+  console.log("[Shadowing] 最终句子数:", sents.length,
+    "| 时间范围:", round3(sents[0].start) + "~" + round3(sents[sents.length - 1].end) + "s",
+    "| 总时长:", totalDuration ? totalDuration.toFixed(1) + "s" : "未知",
+    gapCount > 0 ? ("| 大间隙: " + gapCount + "处") : "");
+
+  return sents;
+}
+
+
+/** 主流程：PDF + 音频 → 对齐 → 载入 */
+document.getElementById("mk-run").addEventListener("click", async function () {
+  const pdfF = document.getElementById("mk-pdf").files[0];
+  let audF = document.getElementById("mk-audio").files[0];
+
+  // 兼容 Safari：DataTransfer 不支持时用缓存的文件引用
+  if (!audF) {
+    const mkAudioEl = document.getElementById("mk-audio");
+    if (mkAudioEl._pendingFile) audF = mkAudioEl._pendingFile;
+  }
+
+  if (!audF) { window.toast("请选择 MP3 音频文件"); return; }
+
+  BTN_RUN.disabled = true;
+  setProgress(0);
+
+  try {
+    // Step 1: 提取 PDF 文字（可选，仅用于标题/对照；句子内容直接由 Whisper 生成以保证匹配）
+    let pdfSentences = [];
+    if (pdfF) {
+      setStatus("① 正在提取 PDF 文字（仅作对照）…");
+      setProgress(5);
+      const rawText = await extractPdfText(pdfF);
+      pdfSentences = splitSentences(rawText);
+      setStatus("① PDF 提取完成（" + pdfSentences.length + " 句，仅作对照）\n② 正在加载 AI 语音模型（首次需下载约 75MB）…");
+      setProgress(10);
+    } else {
+      setStatus("① 无 PDF，文字将由语音直接生成\n② 正在加载 AI 语音模型（首次需下载约 75MB）…");
+      setProgress(10);
+    }
+
+    // Step 2: 加载 Whisper 模型
+    let transcriber;
+    try {
+      transcriber = await pipeline(
+        "automatic-speech-recognition",
+        "Xenova/whisper-tiny.en",
+        {
+          progress_callback: function (x) {
+            if (x.status === "downloading" || x.status === "loading") {
+              const pct = x.progress ? Math.round(x.progress * 80) + 10 : undefined;
+              if (pct !== undefined) setProgress(pct);
+              if (x.file) setStatus("② 下载模型中：" + x.file + (x.progress ? " (" + Math.round(x.progress * 100) + "%)" : ""));
+            } else if (x.status === "ready") {
+              setProgress(90);
+              setStatus("② 模型就绪！\n③ 正在进行语音识别与时间戳对齐…");
+            }
+          },
+        }
+      );
+    } catch (e) {
+      throw new Error("Whisper 模型加载失败：" + e.message + "\n请确认网络畅通（模型需从 CDN 下载）");
+    }
+
+    setProgress(90);
+    setStatus("③ 正在进行语音识别与时间戳对齐…（音频越长耗时越久）");
+
+    // Step 3: 把音频文件交给 Whisper 自己解码（最稳，避免手动重采样格式不兼容）
+    // 直接把文件转成 Blob URL，库内部会处理解码 + 16kHz 重采样
+    const audioUrl = URL.createObjectURL(audF);
+    console.log("[Shadowing] 音频 Blob URL 已创建:", audioUrl.slice(0, 30) + "...");
+
+    // Step 4: Whisper 转录（传入音频 URL，词级时间戳优先）
+    let result;
+    const baseOpts = { chunk_length_s: 30, stride_length_s: 5 };
+    try {
+      result = await transcriber(audioUrl, Object.assign({ return_timestamps: "word" }, baseOpts));
+    } catch (transcribeErr) {
+      console.warn("[Shadowing] 词级时间戳失败，回退到句级:", transcribeErr.message, transcribeErr.stack);
+      try {
+        result = await transcriber(audioUrl, Object.assign({ return_timestamps: true }, baseOpts));
+      } catch (e2) {
+        console.warn("[Shadowing] 句级也失败，回退到无时间戳:", e2.message, e2.stack);
+        result = await transcriber(audioUrl, baseOpts);
+      }
+    }
+
+    // 从 Whisper 结果反推音频总时长（用于纯文本兜底均摊 + 校验 chunking 是否完整）
+    const audioDuration = (result.chunks && result.chunks.length)
+      ? Math.max.apply(null, result.chunks.map(function (c) { return (c.timestamp && c.timestamp[1]) || 0; }))
+      : (result.segments && result.segments.length)
+        ? Math.max.apply(null, result.segments.map(function (s) { return (s.timestamp && s.timestamp[1]) || (s.end || 0); }))
+        : 0;
+
+    // 校验：对比音频真实时长 vs Whisper 覆盖时长，检测长音频 chunking 是否只跑了开头
+    let fileDuration = 0;
+    try {
+      const probe = document.createElement("audio");
+      probe.src = audioUrl;
+      await new Promise(function (res) {
+        probe.addEventListener("loadedmetadata", res, { once: true });
+        probe.addEventListener("error", res, { once: true });
+        setTimeout(res, 3000); // 兜底超时
+      });
+      fileDuration = probe.duration || 0;
+    } catch (_) {}
+    console.log("[Shadowing] 音频真实时长:", fileDuration.toFixed(1) + "s",
+      "| Whisper 覆盖到:", audioDuration.toFixed(1) + "s",
+      "| 覆盖率:", fileDuration > 0 ? Math.round(audioDuration / fileDuration * 100) + "%" : "未知");
+    if (fileDuration > 0 && audioDuration < fileDuration * 0.5) {
+      console.error("[Shadowing] ⚠️ chunking 疑似不完整：Whisper 只覆盖了 " +
+        Math.round(audioDuration / fileDuration * 100) + "% 的音频，后面内容可能丢失。建议检查 transformers.js 版本或改用句级时间戳。");
+    }
+
+    URL.revokeObjectURL(audioUrl);
+
+    // 调试：打印完整结果结构
+    console.log("[Shadowing] Whisper 原始结果:", JSON.stringify(result).slice(0, 2000));
+    console.log("[Shadowing] 结果 keys:", Object.keys(result), "text 预览:", (result.text || "").slice(100));
+
+    setProgress(95);
+    setStatus("④ 正在对齐句子与时间戳…");
+
+    // Step 5: 由 Whisper 输出推导句子与时间戳（词级优先 → 句级 → 纯文本兜底）
+    const aligned = deriveSentences(result, audioDuration);
+    console.log("[Shadowing] 推导句子数:", aligned.length,
+      "| chunks数:", Array.isArray(result.chunks) ? result.chunks.length : "N/A",
+      "| segments数:", Array.isArray(result.segments) ? result.segments.length : "N/A",
+      "| 走了:", (Array.isArray(result.chunks) && result.chunks.length > 0) ? "chunks路径" :
+               (Array.isArray(result.segments) && result.segments.length) ? "segments路径" : "纯文本");
+
+    if (aligned.length === 0) {
+      console.error("[Shadowing] 无法推导句子:", {
+        keys: Object.keys(result),
+        textPreview: (result.text || "").slice(200),
+        chunksLen: Array.isArray(result.chunks) ? result.chunks.length : "N/A",
+        segmentsLen: Array.isArray(result.segments) ? result.segments.length : "N/A",
+        audioDuration: audioDuration,
+      });
+      throw new Error(
+        "语音识别未输出可用内容。可能原因：\n" +
+        "① 音频太长或包含大量静音（试试截取前 2 分钟测试）\n" +
+        "② 音频编码不被支持（推荐 MP3 128kbps+ 或 WAV）\n" +
+        "③ 浏览器内存不足（刷新页面重试）\n" +
+        "\n按 F12 打开控制台可查看详细诊断信息。"
+      );
+    }
+
+    // Step 6: 构建结果并载入（文字来自 Whisper 识别，与语音严格匹配）
+    const meta = {
+      title: (pdfF ? pdfF.name.replace(/\.pdf$/i, "") : audF.name.replace(/\.[^.]+$/i, "")),
+      audio: audF.name,
+      source: "browser-whisper",
+      generated: new Date().toISOString(),
+    };
+    if (pdfSentences.length > 0) meta.pdfReference = pdfSentences; // PDF 原文，仅作对照参考
+    const material = { meta: meta, sentences: aligned };
+
+    setProgress(100);
+    hideProgress();
+    setStatus("");
+    BTN_RUN.disabled = false;
+
+    // 调用主模块的 loadMaterial
+    const audioObjUrl = URL.createObjectURL(audF);
+    window.loadMaterial(material, {
+      url: audioObjUrl,
+      name: audF.name,
+      blob: audF,
+    });
+
+    // 隐藏面板
+    document.getElementById("make-panel").classList.add("hidden");
+    window.toast("材料已生成并载入，共 " + aligned.length + " 句（浏览器端 Whisper 对齐）");
+
+    // 持久化到 IndexedDB：音频 + 句子一并存，刷新后自动恢复，无需重新生成
+    var mid = (window.state && window.state.materialId) || ("mat_" + Date.now());
+    window._idbPut(mid, material, audF).then(function () {
+      console.log("[Shadowing] 材料已存入 IndexedDB（materialId=" + mid + "），刷新可自动恢复");
+    }).catch(function (err) {
+      console.warn("[Shadowing] 材料持久化失败（不影响本次使用）：", err);
+    });
+
+  } catch (e) {
+    hideProgress();
+    setStatus("错误：" + e.message);
+    BTN_RUN.disabled = false;
+    window.toast("生成失败：" + e.message);
+    console.error(e);
+  }
+});
+</script>
+<script src="sync.js"></script>
+<script>
+// PWA：注册 Service Worker（离线可用 / 可安装到桌面和主屏幕）
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  });
+}
+
+// 云同步：启动时初始化 + 挂载账号按钮 + 拉取云端
+window.addEventListener("DOMContentLoaded", function () {
+  Sync.init().then(function () {
+    Sync.mountAccountButton();
+    if (Sync.isAuthed()) syncPullAll();
+  });
+});
+// 登录成功后拉取
+window.onSyncSignedIn = function () {
+  syncPullAll();
+};
+function syncPullAll() {
+  Sync.pullFromCloud().then(function (data) {
+    if (!data) return;
+    var count = (data.materials || []).length;
+    toast("已从云端同步 " + count + " 个材料");
+    // 刷新：让 loadMaterial 重新走（会用刚拉到的数据）
+    var lastId = null;
+    try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {}
+    if (lastId) {
+      _idbGet(lastId).then(function (row) {
+        if (row && row.material && row.audioBlob) {
+          var url = URL.createObjectURL(row.audioBlob);
+          loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+        }
+        // 重渲染生词/列表
+        loadVocab();
+        renderList();
+      }).catch(function () {});
+    } else {
+      loadVocab();
+      renderList();
+    }
+  }).catch(function (err) { console.warn("[sync pull]", err); });
+}
+
+// 上传当前正在用的材料到云端（含音频 + sentences）
+function syncUploadCurrentMaterial() {
+  if (!Sync.isAuthed() || !state.materialId) return;
+  var audioBlob = state.audioBlob || null;
+  Sync.uploadMaterial(
+    state.materialId, audioBlob,
+    state.sentences || [], state.meta || {},
+    (state.meta && state.meta.title) || state.materialId,
+    (state.meta && state.meta.audio) || "audio.mp3"
+  ).then(function () {
+    Sync.setLastMaterial(state.materialId);
+  }).catch(function (err) { console.warn("[sync upload material]", err); });
+}
+
+// 防抖上传生词（每 1.5 秒）
+var _vocabUploadT = null;
+function syncUploadVocabDebounced() {
+  if (!Sync.isAuthed() || !state.materialId) return;
+  clearTimeout(_vocabUploadT);
+  _vocabUploadT = setTimeout(function () {
+    Sync.uploadVocab(state.materialId, state.vocab || []).catch(function (err) { console.warn("[sync upload vocab]", err); });
+  }, 1500);
+}
+// 防抖上传进度
+var _progUploadT = null;
+function syncUploadProgressDebounced() {
+  if (!Sync.isAuthed() || !state.materialId) return;
+  clearTimeout(_progUploadT);
+  _progUploadT = setTimeout(function () {
+    Sync.uploadProgress(state.materialId, [...state.played], [...state.hard], state.lastIndex || 0)
+      .catch(function (err) { console.warn("[sync upload progress]", err); });
+  }, 1500);
+}
+</script>
+</body>
+</html>

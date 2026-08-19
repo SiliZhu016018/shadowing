@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>材料库 · Shadowing English</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#3b82f6" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="跟读" />
+<style>
+  /* === 与生成材料页面统一的设计令牌 === */
+  :root {
+    --bg: #f2f4f8;
+    --panel: #ffffff;
+    --panel-2: #f9fafc;
+    --border: rgba(15,23,42,0.06);
+    --border-strong: rgba(15,23,42,0.12);
+    --border-hi: rgba(15,23,42,0.20);
+    --text: #1e293b;
+    --muted: #64748b;
+    --accent: #3b82f6;
+    --accent-2: #6366f1;
+    --accent-soft: rgba(59,130,246,0.10);
+    --grad-accent: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+    --hard: #f59e0b;
+    --rec: #ef4444;
+    --ok: #22c55e;
+    --mastered: #10b981;
+    --radius: 18px;
+    --radius-sm: 12px;
+    --ease: cubic-bezier(.32,.72,0,1);
+    --shadow-1: 0 1px 2px rgba(15,23,42,.06), 0 2px 8px rgba(15,23,42,.05);
+    --shadow-2: 0 4px 12px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+    --shadow-3: 0 10px 30px rgba(15,23,42,.10), 0 18px 60px rgba(15,23,42,.08);
+    --shadow-glow: 0 8px 28px rgba(59,130,246,.30);
+  }
+  html { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--text); background: var(--bg);
+    background-image: radial-gradient(900px 480px at 8% -10%, rgba(59,130,246,0.10), transparent 55%),
+                      radial-gradient(820px 540px at 92% 0%, rgba(99,102,241,0.08), transparent 55%);
+    background-attachment: fixed; min-height: 100dvh;
+  }
+
+  /* —— 顶部导航 —— */
+  .app-nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(255,255,255,0.78);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px; display: flex; align-items: center; gap: 6px;
+  }
+  .app-nav .brand { font-weight: 700; font-size: 15px; margin-right: 14px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+  .app-nav .nav-item {
+    text-decoration: none; color: var(--muted); font-size: 13.5px; font-weight: 500;
+    padding: 6px 13px; border-radius: 10px; transition: background .18s var(--ease), color .18s var(--ease);
+    white-space: nowrap;
+  }
+  .app-nav .nav-item:hover { background: var(--accent-soft); color: var(--accent); }
+  .app-nav .nav-item.active { background: var(--grad-accent); color: #fff; box-shadow: var(--shadow-glow); }
+
+  /* —— 页面容器 —— */
+  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 16px 60px; }
+  header.page-hd { margin-bottom: 18px; }
+  header.page-hd h1 { font-size: 22px; margin: 0 0 4px; }
+  header.page-hd .sub { color: var(--muted); margin: 0; font-size: 13.5px; }
+
+  /* —— 统计卡片 —— */
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin: 16px 0 22px;
+  }
+  .stat-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow-1);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-card .stat-num { font-size: 24px; font-weight: 800; color: var(--text); line-height: 1.1; }
+  .stat-card .stat-lbl { font-size: 12px; color: var(--muted); }
+  .stat-card.accent .stat-num { color: var(--accent); }
+  .stat-card.hard   .stat-num { color: var(--hard); }
+  .stat-card.rec    .stat-num { color: var(--rec); }
+  .stat-card.ok     .stat-num { color: var(--ok); }
+
+  /* —— 列表卡片 —— */
+  .lib-list { display: flex; flex-direction: column; gap: 12px; }
+  .lib-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; box-shadow: var(--shadow-1);
+    cursor: pointer; transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease);
+    display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+  }
+  .lib-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2), 0 0 0 1px rgba(59,130,246,.15); border-color: var(--accent); }
+  .lib-card.current { border-left: 4px solid var(--ok); }
+  .lib-card .lib-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; word-break: break-word; }
+  .lib-card .lib-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--muted); }
+  .lib-card .lib-meta .m-pill { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; }
+  .lib-card .lib-meta .m-due { color: var(--rec); border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
+  .lib-card .lib-meta .m-progress { display: inline-flex; align-items: center; gap: 6px; }
+  .lib-card .lib-meta .m-progress .m-bar { width: 80px; height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+  .lib-card .lib-meta .m-progress .m-bar > div { height: 100%; background: var(--grad-accent); }
+  .lib-card .lib-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .lib-card .lib-actions button { font-size: 12.5px; padding: 5px 11px; border-radius: 9px; cursor: pointer; }
+  .lib-card .lib-actions .btn-del { color: var(--rec); }
+
+  .empty {
+    background: var(--panel); border: 1px dashed var(--border-strong); border-radius: var(--radius);
+    padding: 40px 16px; text-align: center; color: var(--muted); box-shadow: var(--shadow-1);
+  }
+  .empty .empty-emoji { font-size: 36px; margin-bottom: 8px; }
+
+  /* —— Toast —— */
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: rgba(15,23,42,0.92);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--border-hi);
+    color: #fff; padding: 10px 16px; border-radius: 12px;
+    font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 200;
+    box-shadow: var(--shadow-3);
+  }
+  .toast.show { opacity: 1; }
+
+  button { font: inherit; cursor: pointer; border: 1px solid var(--border-strong); background: var(--panel); color: var(--text); border-radius: var(--radius-sm); padding: 7px 13px; transition: background .18s var(--ease), border-color .18s var(--ease); }
+  button:hover { background: var(--accent-soft); border-color: var(--accent); }
+  button:active { transform: scale(.97); }
+
+  @media (max-width: 540px) {
+    .wrap { padding: 16px 12px 60px; }
+    .lib-card { grid-template-columns: 1fr; }
+    .lib-card .lib-actions { flex-direction: row; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="app-nav">
+  <span class="brand">🎧 Shadowing English</span>
+  <a class="nav-item" href="index.html">📚 生成材料</a>
+  <a class="nav-item" href="vocab.html">📖 生词本</a>
+  <a class="nav-item active" href="library.html">📚 材料库</a>
+  <span class="nav-sync-slot" style="margin-left:auto"></span>
+</nav>
+
+<div class="wrap">
+  <header class="page-hd">
+    <h1>📚 材料库</h1>
+    <p class="sub">所有生成过的听力材料 · 跨材料整合统计学习进度与生词</p>
+  </header>
+
+  <div class="stats" id="stats">
+    <div class="stat-card accent"><div class="stat-num" id="stat-total">—</div><div class="stat-lbl">材料总数</div></div>
+    <div class="stat-card ok"><div class="stat-num" id="stat-started">—</div><div class="stat-lbl">已学材料</div></div>
+    <div class="stat-card"><div class="stat-num" id="stat-words">—</div><div class="stat-lbl">累计生词</div></div>
+    <div class="stat-card rec"><div class="stat-num" id="stat-due">—</div><div class="stat-lbl">待复习生词</div></div>
+  </div>
+
+  <div id="list-wrap"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ========== IndexedDB（与生成材料页面共享同一份数据库） ========== */
+const DB_NAME = "shadowingDB", DB_STORE = "materials";
+function openDB() {
+  return new Promise(function (res, rej) {
+    if (!window.indexedDB) { rej(new Error("浏览器不支持 IndexedDB")); return; }
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = function () { req.result.createObjectStore(DB_STORE, { keyPath: "id" }); };
+    req.onsuccess = function () { res(req.result); };
+    req.onerror = function () { rej(req.error); };
+  });
+}
+function idbGetAll() {
+  return openDB().then(function (db) {
+    return new Promise(function (res, rej) {
+      const tx = db.transaction(DB_STORE, "readonly");
+      const r = tx.objectStore(DB_STORE).getAll();
+      r.onsuccess = function () { res(r.result || []); };
+      r.onerror = function () { rej(r.error); };
+    });
+  });
+}
+function idbGet(id) {
+  return openDB().then(function (db) {
+    return new Promise(function (res, rej) {
+      const tx = db.transaction(DB_STORE, "readonly");
+      const r = tx.objectStore(DB_STORE).get(id);
+      r.onsuccess = function () { res(r.result || null); };
+      r.onerror = function () { rej(r.error); };
+    });
+  });
+}
+function idbDelete(id) {
+  return openDB().then(function (db) {
+    return new Promise(function (res, rej) {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).delete(id);
+      tx.oncomplete = function () { res(); };
+      tx.onerror = function () { rej(tx.error); };
+    });
+  });
+}
+
+/* ========== 工具 ========== */
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function lsKey(kind, materialId) { return "shadowing:" + kind + ":" + materialId; }
+function loadVocab(materialId) {
+  try { return JSON.parse(localStorage.getItem(lsKey("vocab", materialId)) || "[]"); }
+  catch (_) { return []; }
+}
+function loadProgress(materialId) {
+  try { return JSON.parse(localStorage.getItem(lsKey("progress", materialId)) || "{}"); }
+  catch (_) { return {}; }
+}
+function loadHard(materialId) {
+  try { return JSON.parse(localStorage.getItem(lsKey("hard", materialId)) || "[]"); }
+  catch (_) { return []; }
+}
+function isDueWord(v) { return (v.due || 0) <= Date.now(); }
+function isMastered(v) { return (v.level || 0) >= 8; }
+
+function toast(msg, ms) {
+  const t = document.getElementById("toast");
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function () { t.classList.remove("show"); }, ms || 1800);
+}
+
+/* ========== 跨材料统计 ========== */
+function computeStats(rows) {
+  let totalWords = 0, dueWords = 0, started = 0;
+  rows.forEach(function (row) {
+    const vocab = loadVocab(row.id);
+    totalWords += vocab.length;
+    vocab.forEach(function (v) { if (isDueWord(v)) dueWords++; });
+    const prog = loadProgress(row.id);
+    const playedCount = (prog.played && prog.played.length) || 0;
+    if (playedCount > 0) started++;
+  });
+  return { totalMaterials: rows.length, started, totalWords, dueWords };
+}
+
+function updateStats(rows) {
+  const s = computeStats(rows);
+  document.getElementById("stat-total").textContent = s.totalMaterials;
+  document.getElementById("stat-started").textContent = s.started;
+  document.getElementById("stat-words").textContent = s.totalWords;
+  document.getElementById("stat-due").textContent = s.dueWords;
+}
+
+function buildRowHtml(row) {
+  const meta = (row.material && row.material.meta) || {};
+  const title = meta.title || row.id || "未命名";
+  const sentCount = (row.material && row.material.sentences && row.material.sentences.length) || 0;
+  const vocab = loadVocab(row.id);
+  const prog = loadProgress(row.id);
+  const played = (prog.played && prog.played.length) || 0;
+  const total = sentCount || 0;
+  const pct = total ? Math.min(100, Math.round((played / total) * 100)) : 0;
+  const due = vocab.filter(isDueWord).length;
+  const mastered = vocab.filter(isMastered).length;
+  const dateStr = row.updatedAt ? new Date(row.updatedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" }) : "";
+  const audioName = meta.audio || "";
+
+  const metaHtml = [
+    '<span class="m-pill">' + sentCount + ' 句</span>',
+    '<span class="m-pill">📖 ' + vocab.length + ' 词</span>',
+    due > 0 ? '<span class="m-pill m-due">🔴 待复习 ' + due + '</span>' : '',
+    mastered > 0 ? '<span class="m-pill" style="color:var(--mastered);border-color:rgba(16,185,129,.35);background:rgba(16,185,129,.06)">🌟 已掌握 ' + mastered + '</span>' : '',
+    audioName ? '<span class="m-pill">' + escapeHtml(audioName) + '</span>' : "",
+    dateStr ? '<span class="m-pill">' + dateStr + '</span>' : "",
+    total > 0 ? '<span class="m-progress"><span class="m-bar"><div style="width:' + pct + '%"></div></span>' + pct + '%</span>' : ""
+  ].join("");
+
+  return '<div class="lib-card" data-id="' + escapeHtml(row.id) + '">' +
+    '<div>' +
+      '<div class="lib-title">' + escapeHtml(title) + '</div>' +
+      '<div class="lib-meta">' + metaHtml + '</div>' +
+    '</div>' +
+    '<div class="lib-actions">' +
+      '<button class="btn-open" data-open="' + escapeHtml(row.id) + '" style="background:var(--grad-accent);color:#fff;border-color:transparent;font-weight:600;box-shadow:var(--shadow-glow),inset 0 1px 0 rgba(255,255,255,.28)">▶ 打开跟读</button>' +
+      '<button class="btn-del" data-del="' + escapeHtml(row.id) + '">🗑 删除</button>' +
+    '</div>' +
+  '</div>';
+}
+
+/* ========== 加载并渲染 ========== */
+function renderList() {
+  const wrap = document.getElementById("list-wrap");
+  idbGetAll().then(function (rows) {
+    rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    updateStats(rows);
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="empty"><div class="empty-emoji">📭</div>还没有保存的材料<br><small>先去「生成材料」页面拖入 MP3 音频开始第一份</small></div>';
+      return;
+    }
+    wrap.innerHTML = '<div class="lib-list">' + rows.map(buildRowHtml).join("") + '</div>';
+    bindRowActions();
+  }).catch(function (err) {
+    console.error(err);
+    wrap.innerHTML = '<div class="empty">加载失败：' + escapeHtml(err.message || String(err)) + '</div>';
+  });
+}
+
+function bindRowActions() {
+  document.querySelectorAll("[data-open]").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      window.location.href = "index.html?material=" + encodeURIComponent(btn.dataset.open);
+    });
+  });
+  document.querySelectorAll("[data-del]").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const id = btn.dataset.del;
+      if (!confirm("确定删除这个材料？\n\n（生词本会保留，但来源链接会失效）")) return;
+      idbDelete(id).then(function () {
+        toast("已删除");
+        renderList();
+      }).catch(function () { toast("删除失败"); });
+    });
+  });
+  // 整行点击也能打开
+  document.querySelectorAll(".lib-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      window.location.href = "index.html?material=" + encodeURIComponent(card.dataset.id);
+    });
+  });
+}
+
+document.addEventListener("DOMContentLoaded", renderList);
+</script>
+<script src="sync.js"></script>
+<script>
+// PWA + 云同步
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  });
+}
+window.addEventListener("DOMContentLoaded", function () {
+  Sync.init().then(function () {
+    Sync.mountAccountButton();
+    if (Sync.isAuthed()) doPull();
+  });
+});
+window.onSyncSignedIn = function () { doPull(); };
+function doPull() {
+  Sync.pullFromCloud().then(function (data) {
+    if (!data) return;
+    toast("已同步 " + (data.materials || []).length + " 个材料");
+    renderList();
+  }).catch(function (err) { console.warn("[sync pull]", err); });
+}
+</script>
+</body>
+</html>
