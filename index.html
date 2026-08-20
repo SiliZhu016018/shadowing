@@ -763,7 +763,15 @@
     state.playingIndex = null;
     state.recordings = {};
     state.lastIndex = 0;
-    audio.src = (audioSrc && audioSrc.url) ? audioSrc.url : audioSrc;
+    if (audioSrc && audioSrc.url) {
+      audio.src = audioSrc.url;
+      state.audioUrl = audioSrc.url;
+    } else {
+      // 无音频时不清空 src（避免原生播放器显示"错误"），而是移除 src 让播放器显示空白态
+      audio.removeAttribute("src");
+      audio.load();
+      state.audioUrl = null;
+    }
     loadProgress();
     loadVocab(); // 必须在 renderList 之前加载当前材料的生词（高亮依赖它）
     dropzone.classList.add("hidden");
@@ -2779,12 +2787,26 @@ document.getElementById("mk-run").addEventListener("click", async function () {
 // 拉到后自动更新 IndexedDB + 当前播放器，无感恢复音频功能
 function tryFetchCloudAudio(materialId) {
   if (!materialId || !window.Sync || !Sync.isAuthed()) return;
+  // 立即更新 UI 提示用户正在拉取音频
+  if (state.materialId === materialId && state.sentences && state.sentences.length && !audio.src) {
+    var infoEl = document.querySelector(".player-info");
+    if (infoEl) infoEl.textContent = "⏳ 音频加载中...";
+  }
+  toast("正在从云端下载音频...");
   Sync.fetchAll().then(function (data) {
-    if (!data || !data.materials) return;
+    if (!data || !data.materials) {
+      toast("云端无材料数据"); return;
+    }
     var m = data.materials.find(function (x) { return x.id === materialId; });
-    if (!m || !m.audioPath) return;
-    return Sync.downloadAudio(m.audioPath).then(function (buf) {
-      var blob = new Blob([buf], { type: "audio/mpeg" });
+    if (!m) { toast("云端未找到该材料"); return; }
+    if (!m.audioPath) {
+      toast("该材料暂无云端音频（需在电脑端重新上传原始音频）"); return;
+    }
+    return Sync.downloadAudio(m.audioPath).then(function (blob) {
+      // downloadAudio 返回的已是 Blob，无需再包
+      if (!(blob instanceof Blob)) {
+        console.warn("[tryFetchCloudAudio] 返回非 Blob", typeof blob); return;
+      }
       // 更新 IndexedDB
       return window._idbGet(materialId).then(function (row) {
         if (!row || !row.material) return;
@@ -2794,13 +2816,15 @@ function tryFetchCloudAudio(materialId) {
             var url = URL.createObjectURL(blob);
             audio.src = url;
             state.audioBlob = blob;
-            toast("音频已加载");
+            state.audioUrl = url;
+            toast("✅ 音频已加载，可以播放了");
           }
         });
       });
     });
   }).catch(function (err) {
     console.warn("[tryFetchCloudAudio] 后台拉取音频失败", materialId, err);
+    toast("❌ 音频下载失败：" + (err && err.message || String(err)));
   });
 }
 
