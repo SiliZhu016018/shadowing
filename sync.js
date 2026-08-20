@@ -361,7 +361,10 @@ function _ensureAuthOverlay() {
       ".nav-sync-acct { font-size: 12.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid rgba(15,23,42,.15); background: rgba(255,255,255,.5); color: #1e293b; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }" +
       ".nav-sync-acct:hover { background: #f1f5f9; }" +
       ".nav-sync-acct .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; display: inline-block; }" +
-      ".nav-sync-acct.on .sync-dot { background: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,.18); }";
+      ".nav-sync-acct.on .sync-dot { background: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,.18); }" +
+      ".nav-sync-btn { font-size: 16px; padding: 5px 8px; border-radius: 999px; border: 1px solid rgba(15,23,42,.15); background: rgba(255,255,255,.5); color: #1e293b; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 28px; transition: opacity .2s; }" +
+      ".nav-sync-btn:hover:not(:disabled) { background: #f1f5f9; }" +
+      ".nav-sync-btn:disabled { cursor: wait; }";
     document.head.appendChild(css);
   }
 
@@ -400,22 +403,57 @@ Sync.openAuth = function () {
   document.getElementById("sync-auth-email").focus();
 };
 
-// 把账号状态显示在指定 slot（每个页面的导航里加 <span class="nav-sync-slot"></span>）
+// 把账号状态 + 手动同步按钮显示在指定 slot（每个页面的导航里加 <span class="nav-sync-slot"></span>）
 Sync.mountAccountButton = function () {
   function render() {
     var slots = document.querySelectorAll(".nav-sync-slot");
     slots.forEach(function (slot) {
+      var html = "";
+      // 同步按钮（始终显示，未登录时灰色禁用态）
+      html += '<button class="nav-sync-btn" id="nav-sync-refresh" title="从云端拉取最新数据">🔄</button>';
       if (_user) {
-        slot.innerHTML = '<button class="nav-sync-acct on" title="已登录 · 点击查看"><span class="sync-dot"></span>' +
+        html += '<button class="nav-sync-acct on" title="已登录 · 点击查看"><span class="sync-dot"></span>' +
           (_user.email || "已登录") + " · 退出</button>";
-        slot.querySelector("button").addEventListener("click", async function () {
-          if (confirm("退出登录？退出后本地仍可使用，但不再同步到云端。")) {
-            await Sync.signOut();
-          }
-        });
       } else {
-        slot.innerHTML = '<button class="nav-sync-acct">☁️ 登录同步</button>';
-        slot.querySelector("button").addEventListener("click", function () { Sync.openAuth(); });
+        html += '<button class="nav-sync-acct">☁️ 登录同步</button>';
+      }
+      slot.innerHTML = html;
+
+      // 同步按钮事件
+      var btn = document.getElementById("nav-sync-refresh");
+      if (btn) {
+        if (!_user) { btn.style.opacity = "0.4"; btn.style.pointerEvents = "none"; }
+        btn.addEventListener("click", function () {
+          if (!_user) { Sync.openAuth(); return; }
+          btn.disabled = true;
+          btn.textContent = "⏳";
+          // 优先用页面自定义的 syncPullAll（index.html 有完整刷新逻辑），否则走基础 pull
+          var p = typeof window.syncPullAll === "function"
+            ? window.syncPullAll()
+            : Sync.pullFromCloud().then(function (d) {
+                if (d && d.materials) {
+                  if (typeof window.toast === "function") window.toast("已同步 " + d.materials.length + " 个材料");
+                  else alert("已同步 " + d.materials.length + " 个材料");
+                  if (typeof window.loadVocab === "function") window.loadVocab();
+                  if (typeof window.renderList === "function") window.renderList();
+                }
+              });
+          p.finally(function () { btn.disabled = false; btn.textContent = "🔄"; });
+        });
+      }
+
+      // 账号按钮事件
+      var acctBtn = slot.querySelector(".nav-sync-acct");
+      if (acctBtn) {
+        if (_user) {
+          acctBtn.addEventListener("click", async function () {
+            if (confirm("退出登录？退出后本地仍可使用，但不再同步到云端。")) {
+              await Sync.signOut();
+            }
+          });
+        } else {
+          acctBtn.addEventListener("click", function () { Sync.openAuth(); });
+        }
       }
     });
   }

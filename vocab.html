@@ -51,12 +51,14 @@
 
   /* 顶部导航 */
   .app-nav {
-    position: sticky; top: 0; z-index: 100;
+    display: flex; align-items: center; gap: 6px;
     background: rgba(255,255,255,0.78);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     backdrop-filter: blur(20px) saturate(180%);
-    border-bottom: 1px solid var(--border);
-    padding: 10px 16px; display: flex; align-items: center; gap: 6px;
+    border-radius: var(--radius); padding: 8px 12px;
+    margin: 0 0 12px;
+    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
   }
   .app-nav .brand { font-weight: 700; font-size: 15px; margin-right: 14px; display: flex; align-items: center; gap: 6px; }
   .app-nav .nav-item {
@@ -217,15 +219,15 @@
 </head>
 <body>
 
-<nav class="app-nav">
-  <span class="brand">🎧 <span class="brand-text">Shadowing English</span></span>
-  <a class="nav-item" href="index.html">📚 生成材料</a>
-  <a class="nav-item active" href="vocab.html">📖 生词本</a>
-  <a class="nav-item" href="library.html">📚 材料库</a>
-  <span class="nav-sync-slot" style="margin-left:auto"></span>
-</nav>
-
 <div class="wrap">
+  <nav class="app-nav">
+    <span class="brand">🎧 <span class="brand-text">Shadowing English</span></span>
+    <a class="nav-item" href="index.html">📚 生成材料</a>
+    <a class="nav-item active" href="vocab.html">📖 生词本</a>
+    <a class="nav-item" href="library.html">📚 材料库</a>
+    <span class="nav-sync-slot" style="margin-left:auto"></span>
+  </nav>
+
   <header class="page-hd">
     <div>
       <h1>📖 生词本</h1>
