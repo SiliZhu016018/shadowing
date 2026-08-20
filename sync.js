@@ -215,9 +215,13 @@ const Sync = {
   // 拉云端全量并写入本地 IndexedDB + localStorage（覆盖式）
   async pullFromCloud() {
     if (!Sync.isAuthed()) return null;
+    // 双向合并：先拉云端 → 合并进本地（不清本地）→ 再把云端没有的本地材料推上去
+    // 这样本地独有数据不会丢、云端独有数据也能下到本地，且不会用旧版本覆盖新版本
     const data = await Sync.fetchAll();
     if (!data) return null;
     await Sync.applyCloudDataToLocal(data);
+    const cloudIds = new Set((data.materials || []).map(function (m) { return m.id; }));
+    await Sync.pushLocalAll(cloudIds);
     return data;
   },
 
@@ -249,18 +253,15 @@ const Sync = {
 // 把云端 fetchAll 返回的数据写入本地
 Sync.applyCloudDataToLocal = async function (data) {
   if (!data) return;
-  // 清空本地 IndexedDB materials
-  try {
-    const rows = await window._idbGetAll();
-    for (const r of rows || []) { try { await window._idbDelete(r.id); } catch (e) {} }
-  } catch (e) {}
-  // 写入云端 materials（含音频）
+  // 合并模式：只把云端有的材料写回本地（按 id 覆盖），绝不删除本地独有材料 —— 防止「云端空 → 清空本地」的数据丢失
+  // 写入云端 materials（含音频）；云端音频下载失败时保留本地已有音频，避免丢失
   for (const m of (data.materials || [])) {
     let blob = null;
     if (m.audioPath) {
       try { const buf = await Sync.downloadAudio(m.audioPath); blob = new Blob([buf], { type: "audio/mpeg" }); }
       catch (e) { console.warn("[Sync] downloadAudio failed", m.id, e); }
     }
+    if (!blob) { try { const ex = await window._idbGet(m.id); if (ex) blob = ex.audioBlob || null; } catch (e) {} }
     try { await window._idbPut(m.id, { sentences: m.sentences || [], meta: m.meta || {}, title: m.title, audio: m.audioName }, blob); }
     catch (e) { console.warn("[Sync] put material failed", m.id, e); }
   }
@@ -277,6 +278,40 @@ Sync.applyCloudDataToLocal = async function (data) {
   }
   if (data.lastMaterialId) {
     try { localStorage.setItem("shadowing:lastMaterialId", data.lastMaterialId); } catch (e) {}
+  }
+};
+
+// 把本地 IndexedDB 中所有材料推到云端（登录/同步时调用，防止本地独有数据永久留在一台设备）
+Sync.pushLocalAll = async function (existingIds) {
+  if (!Sync.isAuthed()) return;
+  let rows = [];
+  try { rows = (await window._idbGetAll()) || []; } catch (e) { return; }
+  const skip = existingIds instanceof Set ? existingIds : null;
+  for (const r of rows) {
+    try {
+      const id = r.id;
+      if (!id) continue;
+      if (skip && skip.has(id)) continue;   // 云端已有：不回写，避免用本地旧版本覆盖云端新版本
+      const material = r.material || {};
+      const blob = r.audioBlob || null;
+      await Sync.upsertMaterial({
+        id: id,
+        title: (material.meta && material.meta.title) || id,
+        audioName: (material.meta && material.meta.audio) || "audio.mp3",
+        sentences: material.sentences || [],
+        meta: material.meta || {},
+        audioBlob: blob,
+      });
+      try {
+        const vb = JSON.parse(localStorage.getItem("shadowing:vocab:" + id) || "[]");
+        if (vb && vb.length) await Sync.upsertVocab(id, vb);
+      } catch (e) {}
+      try {
+        const pr = JSON.parse(localStorage.getItem("shadowing:progress:" + id) || "{}");
+        const hd = JSON.parse(localStorage.getItem("shadowing:hard:" + id) || "[]");
+        if (pr && (pr.played || pr.lastIndex)) await Sync.upsertProgress(id, pr.played || [], hd || [], pr.lastIndex || 0);
+      } catch (e) {}
+    } catch (e) { console.warn("[Sync] pushLocalOne failed", r && r.id, e); }
   }
 };
 
