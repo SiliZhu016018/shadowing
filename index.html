@@ -1427,10 +1427,16 @@
     var restorePromise;
     if (lastId) {
       restorePromise = _idbGet(lastId).then(function (row) {
-        if (row && row.material && row.material.sentences && row.material.sentences.length && row.audioBlob) {
+        if (row && row.material && row.material.sentences && row.material.sentences.length) {
           state.activeMaterialId = lastId;
-          var url = URL.createObjectURL(row.audioBlob);
-          loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+          // 有音频就直接用，没有也先加载句子（后台异步补拉）
+          if (row.audioBlob) {
+            var url = URL.createObjectURL(row.audioBlob);
+            loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+          } else {
+            loadMaterial(row.material, null);
+            tryFetchCloudAudio(lastId);  // 后台尝试从云端拉音频
+          }
           return true;
         }
         return false;
@@ -1446,10 +1452,15 @@
         if (!rows || !rows.length) return false;
         rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
         var latest = rows[0];
-        if (latest && latest.material && latest.material.sentences && latest.material.sentences.length && latest.audioBlob) {
+        if (latest && latest.material && latest.material.sentences && latest.material.sentences.length) {
           state.activeMaterialId = latest.id;
-          var url = URL.createObjectURL(latest.audioBlob);
-          loadMaterial(latest.material, { url: url, name: (latest.material.meta && latest.material.meta.audio) || "audio" });
+          if (latest.audioBlob) {
+            var url = URL.createObjectURL(latest.audioBlob);
+            loadMaterial(latest.material, { url: url, name: (latest.material.meta && latest.material.meta.audio) || "audio" });
+          } else {
+            loadMaterial(latest.material, null);
+            tryFetchCloudAudio(latest.id);
+          }
           return true;
         }
         return false;
@@ -2070,12 +2081,17 @@
   function switchToMaterial(id) {
     _idbGet(id).then(function (row) {
       if (!row || !row.material) { toast("材料数据不完整"); return; }
-      var url = URL.createObjectURL(row.audioBlob);
-      loadMaterial(row.material, {
-        url: url,
-        name: (row.material.meta && row.material.meta.audio) || "audio",
-        blob: row.audioBlob,
-      });
+      if (row.audioBlob) {
+        var url = URL.createObjectURL(row.audioBlob);
+        loadMaterial(row.material, {
+          url: url,
+          name: (row.material.meta && row.material.meta.audio) || "audio",
+          blob: row.audioBlob,
+        });
+      } else {
+        loadMaterial(row.material, null);
+        tryFetchCloudAudio(id);
+      }
       state.activeMaterialId = id;
       // 记住最后使用的材料 ID
       try { localStorage.setItem("shadowing:lastMaterialId", id); } catch (_) {}
@@ -2758,6 +2774,36 @@ document.getElementById("mk-run").addEventListener("click", async function () {
 </script>
 <script src="sync.js"></script>
 <script>
+
+// 后台异步从云端补拉音频（当本地 IndexedDB 有材料句子但缺少 audioBlob 时调用）
+// 拉到后自动更新 IndexedDB + 当前播放器，无感恢复音频功能
+function tryFetchCloudAudio(materialId) {
+  if (!materialId || !window.Sync || !Sync.isAuthed()) return;
+  Sync.fetchAll().then(function (data) {
+    if (!data || !data.materials) return;
+    var m = data.materials.find(function (x) { return x.id === materialId; });
+    if (!m || !m.audioPath) return;
+    return Sync.downloadAudio(m.audioPath).then(function (buf) {
+      var blob = new Blob([buf], { type: "audio/mpeg" });
+      // 更新 IndexedDB
+      return window._idbGet(materialId).then(function (row) {
+        if (!row || !row.material) return;
+        return window._idbPut(materialId, row.material, blob).then(function () {
+          // 如果当前正在显示这个材料，更新播放器
+          if (state.materialId === materialId && state.sentences && state.sentences.length) {
+            var url = URL.createObjectURL(blob);
+            audio.src = url;
+            state.audioBlob = blob;
+            toast("音频已加载");
+          }
+        });
+      });
+    });
+  }).catch(function (err) {
+    console.warn("[tryFetchCloudAudio] 后台拉取音频失败", materialId, err);
+  });
+}
+
 // PWA：注册 Service Worker（离线可用 / 可安装到桌面和主屏幕）
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
@@ -2786,9 +2832,14 @@ function syncPullAll() {
     try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {}
     if (lastId) {
       _idbGet(lastId).then(function (row) {
-        if (row && row.material && row.audioBlob) {
-          var url = URL.createObjectURL(row.audioBlob);
-          loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+        if (row && row.material && row.material.sentences && row.material.sentences.length) {
+          if (row.audioBlob) {
+            var url = URL.createObjectURL(row.audioBlob);
+            loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+          } else {
+            loadMaterial(row.material, null);
+            tryFetchCloudAudio(lastId);
+          }
         }
         // 重渲染生词/列表
         loadVocab();

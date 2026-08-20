@@ -120,15 +120,16 @@ const Sync = {
   // 下载某材料的音频 blob（按 audioPath）
   async downloadAudio(audioPath) {
     const c = await _loadClient(); if (!c || !_user) return null;
-    const { data, error } = c.storage.from("audio").download(audioPath);
+    const { data, error } = await c.storage.from("audio").download(audioPath);
     if (error) throw error;
-    return await data.arrayBuffer();
+    return data; // data 已是 Blob
   },
 
   // 生成音频 URL（带签名，1 小时有效）
   async audioUrl(audioPath) {
     const c = await _loadClient(); if (!c || !_user) return null;
-    const { data } = c.storage.from("audio").createSignedUrl(audioPath, 3600);
+    const { data, error } = await c.storage.from("audio").createSignedUrl(audioPath, 3600);
+    if (error) throw error;
     return data ? data.signedUrl : null;
   },
 
