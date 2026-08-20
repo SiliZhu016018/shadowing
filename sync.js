@@ -439,7 +439,11 @@ Sync.mountAccountButton = function () {
                   if (typeof window.renderList === "function") window.renderList();
                 }
               });
-          p.finally(function () { btn.disabled = false; btn.textContent = "🔄"; });
+          var done = false;
+          function reset() { if (done) return; done = true; btn.disabled = false; btn.textContent = "🔄"; }
+          p.finally(reset);
+          // 30 秒超时兜底：无论如何恢复按钮，避免卡在 ⏳
+          setTimeout(reset, 30000);
         });
       }
 

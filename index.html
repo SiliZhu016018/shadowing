@@ -2847,7 +2847,7 @@ window.onSyncSignedIn = function () {
   syncPullAll();
 };
 function syncPullAll() {
-  Sync.pullFromCloud().then(function (data) {
+  return Sync.pullFromCloud().then(function (data) {
     if (!data) return;
     var count = (data.materials || []).length;
     toast("已从云端同步 " + count + " 个材料");
