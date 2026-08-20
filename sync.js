@@ -78,10 +78,10 @@ const Sync = {
     const c = await _loadClient(); if (!c || !_user) return null;
     const uid = _uid();
     const [m, v, p, s] = await Promise.all([
-      c.from("materials").select("*").eq("user_id", uid).header("Cache-Control", "no-cache"),
-      c.from("vocab").select("*").eq("user_id", uid).header("Cache-Control", "no-cache"),
-      c.from("progress").select("*").eq("user_id", uid).header("Cache-Control", "no-cache"),
-      c.from("user_settings").select("*").eq("user_id", uid).maybeSingle().header("Cache-Control", "no-cache"),
+      c.from("materials").select("*").eq("user_id", uid),
+      c.from("vocab").select("*").eq("user_id", uid),
+      c.from("progress").select("*").eq("user_id", uid),
+      c.from("user_settings").select("*").eq("user_id", uid).maybeSingle(),
     ]);
 
     const materials = (m.data || []).map(function (row) {
