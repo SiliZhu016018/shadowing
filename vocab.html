@@ -287,12 +287,16 @@ function idbGet(id) { return openDB().then(function (db) { return new Promise(fu
 window._idbGetAll = idbGetAll;
 window._idbGet = idbGet;
 window._idbPut = function (id, material, blob) {
+  if (!id) return Promise.reject(new Error("_idbPut: id 为空"));
+  console.log("[_idbPut] 写入:", id, "material keys:", material ? Object.keys(material) : "null", "有blob:", !!blob);
   return openDB().then(function (db) {
     return new Promise(function (res, rej) {
       const tx = db.transaction(DB_STORE, "readwrite");
-      tx.objectStore(DB_STORE).put({ id: id, material: material, audioBlob: blob, updatedAt: Date.now() });
-      tx.oncomplete = function () { res(); };
-      tx.onerror = function () { rej(tx.error); };
+      const row = { id: id, material: material || {}, audioBlob: blob || null, updatedAt: Date.now() };
+      const req = tx.objectStore(DB_STORE).put(row);
+      req.onsuccess = function () { console.log("[_idbPut] 成功:", id); res(); };
+      req.onerror = function () { console.error("[_idbPut] req.error:", req.error); rej(req.error); };
+      tx.onabort = function () { console.error("[_idbPut] tx.abort, error:", tx.error); rej(tx.error || new Error("transaction aborted")); };
     });
   });
 };

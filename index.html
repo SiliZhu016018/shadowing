@@ -686,12 +686,15 @@
     });
   }
   function idbPut(id, material, audioBlob) {
+    if (!id) return Promise.reject(new Error("idbPut: id 为空"));
     return openDB().then(function (db) {
       return new Promise(function (res, rej) {
         const tx = db.transaction(DB_STORE, "readwrite");
-        tx.objectStore(DB_STORE).put({ id: id, material: material, audioBlob: audioBlob, updatedAt: Date.now() });
-        tx.oncomplete = function () { res(); };
-        tx.onerror = function () { rej(tx.error); };
+        const row = { id: id, material: material || {}, audioBlob: audioBlob || null, updatedAt: Date.now() };
+        const req = tx.objectStore(DB_STORE).put(row);
+        req.onsuccess = function () { res(); };
+        req.onerror = function () { rej(req.error); };
+        tx.onabort = function () { rej(tx.error || new Error("transaction aborted")); };
       });
     });
   }
@@ -1494,6 +1497,13 @@
         }
         return false;
       });
+      });
+    }).then(function (loaded) {
+      // 本地没找到时，尝试从云端直接加载（Safari 私有模式 IndexedDB 写入失败的兜底）
+      if (!loaded && (urlMaterialId || lastId) && window.Sync && Sync.isAuthed()) {
+        return loadMaterialFromCloud(urlMaterialId || lastId).then(function (c) { loaded = c; return loaded; });
+      }
+      return loaded;
     }).then(function () {
       // URL 带 play=N：自动跳到指定句播放（来自生词本/材料库的「听原句」跳转）
       if (!isNaN(urlPlayIdx) && state.sentences && state.sentences[urlPlayIdx]) {
@@ -2842,6 +2852,37 @@ function tryFetchCloudAudio(materialId) {
   }).catch(function (err) {
     console.warn("[tryFetchCloudAudio] 失败", materialId, err);
     toast("❌ 音频获取失败：" + (err && err.message || String(err)));
+  });
+}
+
+// 本地 IndexedDB 没有材料时，直接从云端拉取（句子+音频）加载——Safari 私有模式/写入失败兜底
+function loadMaterialFromCloud(materialId) {
+  if (!materialId || !window.Sync) {
+    console.log("[loadMaterialFromCloud] 跳过：无 Sync 或无效 id");
+    return Promise.resolve(false);
+  }
+  // 先确保 Sync 已初始化（拿到登录态），否则 fetchAll 会因未登录失败
+  var ready = Sync.isAuthed() ? Promise.resolve() : Promise.resolve(Sync.init()).then(function () { return; }).catch(function () { return; });
+  return ready.then(function () {
+    if (!Sync.isAuthed()) { console.log("[loadMaterialFromCloud] 跳过：未登录", materialId); return false; }
+    console.log("[loadMaterialFromCloud] 从云端加载:", materialId);
+    return Sync.fetchAll().then(function (data) {
+      if (!data || !data.materials) { console.warn("[loadMaterialFromCloud] 云端无数据"); return false; }
+      var m = data.materials.find(function (x) { return x.id === materialId; });
+      if (!m) { console.warn("[loadMaterialFromCloud] 云端未找到", materialId); return false; }
+      var mat = {
+        sentences: m.sentences || [],
+        meta: Object.assign({}, m.meta || {}, { audioPath: m.audioPath || null, title: m.title, audio: m.audioName }),
+        title: m.title, audio: m.audioName,
+      };
+      state.activeMaterialId = materialId;
+      loadMaterial(mat, m.audioPath ? { path: m.audioPath } : null);
+      console.log("[loadMaterialFromCloud] 已从云端加载句子 + 触发音频补拉");
+      return true;
+    }).catch(function (err) {
+      console.warn("[loadMaterialFromCloud] 失败", err);
+      return false;
+    });
   });
 }
 

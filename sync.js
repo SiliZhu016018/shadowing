@@ -243,6 +243,10 @@ const Sync = {
     const data = await Sync.fetchAll();
     if (!data) return null;
     await Sync.applyCloudDataToLocal(data);
+    // 云端渲染兜底：即使 IndexedDB 写入失败（如 Safari 私有模式），列表也能从云端显示
+    if (typeof window.renderCloudList === "function" && data.materials && data.materials.length) {
+      try { window.renderCloudList(data.materials); } catch (e) { console.warn("[Sync] renderCloudList 失败", e); }
+    }
     const cloudIds = new Set((data.materials || []).map(function (m) { return m.id; }));
     console.log("[Sync] pullFromCloud cloudIds:", Array.from(cloudIds));
     await Sync.pushLocalAll(cloudIds);
@@ -292,7 +296,11 @@ Sync.applyCloudDataToLocal = async function (data) {
       catch (e) { console.warn("[Sync] downloadAudio failed", m.id, e); }
     }
     if (!blob) { try { const ex = await window._idbGet(m.id); if (ex) blob = ex.audioBlob || null; } catch (e) {} }
-    try { await window._idbPut(m.id, mat, blob); }
+    try {
+      console.log("[Sync] applyCloudDataToLocal 写入:", m.id, "audioPath:", m.audioPath || "(无)", "有blob:", !!blob);
+      await window._idbPut(m.id, mat, blob);
+      console.log("[Sync] applyCloudDataToLocal 写入成功:", m.id);
+    }
     catch (e) { console.warn("[Sync] put material failed", m.id, e); }
   }
   // 写入 vocab

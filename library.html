@@ -223,12 +223,21 @@ function idbDelete(id) {
 window._idbGetAll = idbGetAll;
 window._idbGet = idbGet;
 window._idbPut = function (id, material, blob) {
+  // 参数校验 & 日志
+  if (!id) return Promise.reject(new Error("_idbPut: id 为空"));
+  console.log("[_idbPut] 写入:", id, "material keys:", material ? Object.keys(material) : "null", "有blob:", !!blob);
   return openDB().then(function (db) {
     return new Promise(function (res, rej) {
       const tx = db.transaction(DB_STORE, "readwrite");
-      tx.objectStore(DB_STORE).put({ id: id, material: material, audioBlob: blob, updatedAt: Date.now() });
-      tx.oncomplete = function () { res(); };
-      tx.onerror = function () { rej(tx.error); };
+      const row = { id: id, material: material || {}, audioBlob: blob || null, updatedAt: Date.now() };
+      const req = tx.objectStore(DB_STORE).put(row);
+      req.onsuccess = function () { console.log("[_idbPut] 成功:", id); res(); };
+      req.onerror = function () { console.error("[_idbPut] req.error:", req.error); rej(req.error); };
+      tx.onabort = function () { console.error("[_idbPut] tx.abort, error:", tx.error); rej(tx.error || new Error("transaction aborted")); };
+      tx.onerror = function (e) { console.error("[_idbPut] tx.error event:", e); };
+    });
+  });
+};
     });
   });
 };
@@ -321,6 +330,33 @@ function buildRowHtml(row) {
     '</div>' +
   '</div>';
 }
+
+/* ========== 直接从云端数据渲染（绕过 IndexedDB，Safari 私有模式/写入失败时兜底） ========== */
+window.renderCloudList = function (materials) {
+  const wrap = document.getElementById("list-wrap");
+  if (!materials || !materials.length) {
+    wrap.innerHTML = '<div class="empty"><div class="empty-emoji">☁️</div>云端暂无材料<br><small>先去「生成材料」页面拖入 MP3 音频开始第一份</small></div>';
+    return;
+  }
+  // 云端格式 → 本地 row 格式
+  const rows = materials.map(function (m) {
+    const meta = Object.assign({}, m.meta || {}, {
+      audioPath: m.audioPath || (m.meta && m.meta.audioPath) || null,
+      title: m.title || (m.meta && m.meta.title) || m.id,
+      audio: m.audioName || (m.meta && m.meta.audio) || "",
+    });
+    return {
+      id: m.id,
+      material: { sentences: m.sentences || [], meta: meta, title: m.title, audio: m.audioName },
+      updatedAt: m.updatedAt ? new Date(m.updatedAt).getTime() : 0,
+    };
+  });
+  rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+  updateStats(rows);
+  wrap.innerHTML = '<div class="lib-list">' + rows.map(buildRowHtml).join("") + '</div>';
+  bindRowActions();
+  console.log("[library] renderCloudList 渲染了", rows.length, "个云端材料");
+};
 
 /* ========== 加载并渲染 ========== */
 function renderList() {
