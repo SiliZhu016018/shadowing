@@ -219,6 +219,20 @@ function idbDelete(id) {
     });
   });
 }
+// 挂到 window 供 sync.js 使用（与 index.html 的命名一致）
+window._idbGetAll = idbGetAll;
+window._idbGet = idbGet;
+window._idbPut = function (id, material, blob) {
+  return openDB().then(function (db) {
+    return new Promise(function (res, rej) {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).put({ id: id, material: material, audioBlob: blob, updatedAt: Date.now() });
+      tx.oncomplete = function () { res(); };
+      tx.onerror = function () { rej(tx.error); };
+    });
+  });
+};
+window._idbDelete = idbDelete;
 
 /* ========== 工具 ========== */
 function escapeHtml(s) {

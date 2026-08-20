@@ -283,6 +283,29 @@ function openDB() {
 }
 function idbGetAll() { return openDB().then(function (db) { return new Promise(function (res, rej) { const tx = db.transaction(DB_STORE, "readonly"); const r = tx.objectStore(DB_STORE).getAll(); r.onsuccess = function () { res(r.result || []); }; r.onerror = function () { rej(r.error); }; }); }); }
 function idbGet(id) { return openDB().then(function (db) { return new Promise(function (res, rej) { const tx = db.transaction(DB_STORE, "readonly"); const r = tx.objectStore(DB_STORE).get(id); r.onsuccess = function () { res(r.result || null); }; r.onerror = function () { rej(r.error); }; }); }); }
+// 挂到 window 供 sync.js 使用（与 index.html 的命名一致）
+window._idbGetAll = idbGetAll;
+window._idbGet = idbGet;
+window._idbPut = function (id, material, blob) {
+  return openDB().then(function (db) {
+    return new Promise(function (res, rej) {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).put({ id: id, material: material, audioBlob: blob, updatedAt: Date.now() });
+      tx.oncomplete = function () { res(); };
+      tx.onerror = function () { rej(tx.error); };
+    });
+  });
+};
+window._idbDelete = function (id) {
+  return openDB().then(function (db) {
+    return new Promise(function (res, rej) {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).delete(id);
+      tx.oncomplete = function () { res(); };
+      tx.onerror = function () { rej(tx.error); };
+    });
+  });
+};
 
 /* ========== 艾宾浩斯遗忘曲线调度 ========== */
 var REVIEW_INTERVALS = [5, 30, 12 * 60, 24 * 60, 2 * 24 * 60, 4 * 24 * 60, 7 * 24 * 60, 15 * 24 * 60];
