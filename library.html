@@ -133,6 +133,11 @@
   button:hover { background: var(--accent-soft); border-color: var(--accent); }
   button:active { transform: scale(.97); }
 
+  @media (max-width: 640px) {
+    .app-nav { gap: 4px; padding: 8px 10px; flex-wrap: wrap; }
+    .app-nav .brand .brand-text { display: none; }
+    .app-nav .nav-item { padding: 5px 9px; font-size: 12.5px; }
+  }
   @media (max-width: 540px) {
     .wrap { padding: 16px 12px 60px; }
     .lib-card { grid-template-columns: 1fr; }
@@ -143,7 +148,7 @@
 <body>
 
 <nav class="app-nav">
-  <span class="brand">🎧 Shadowing English</span>
+  <span class="brand">🎧 <span class="brand-text">Shadowing English</span></span>
   <a class="nav-item" href="index.html">📚 生成材料</a>
   <a class="nav-item" href="vocab.html">📖 生词本</a>
   <a class="nav-item active" href="library.html">📚 材料库</a>
