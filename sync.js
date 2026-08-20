@@ -147,22 +147,31 @@ const Sync = {
       const { error: upErr } = await c.storage.from("audio")
         .upload(audioPath, material.audioBlob, { upsert: true, contentType: "audio/mpeg" });
       if (upErr) throw upErr;
+      console.log("[Sync] 音频已上传到 Storage:", audioPath);
     } else if (!audioPath) {
       // 本地没有音频 blob，也没记录云端路径：先查云端是否已有该材料的音频，避免把已有音频覆盖成 null
       try {
         const { data: ex } = await c.from("materials").select("audio_path").eq("id", material.id).eq("user_id", uid).maybeSingle();
-        if (ex && ex.audio_path) audioPath = ex.audio_path;
+        if (ex && ex.audio_path) {
+          audioPath = ex.audio_path;
+          console.log("[Sync] 保留云端已有 audio_path:", audioPath);
+        }
       } catch (e) { console.warn("[Sync] 读取已有 audio_path 失败", e); }
     }
 
-    const row = {
+    // 构建写入行：audioPath 为 null 时绝不写入（防止 upsert 覆盖云端已有值为 null）
+    var row = {
       id: material.id, user_id: uid, title: material.title,
-      audio_name: material.audioName, audio_path: audioPath,
+      audio_name: material.audioName,
       sentences: material.sentences, meta: material.meta || {},
     };
+    // 只有确认有有效音频路径时才写入 audio_path 字段
+    if (audioPath) {
+      row.audio_path = audioPath;
+    }
     const { error } = await c.from("materials").upsert(row);
     if (error) throw error;
-    console.log("[Sync] upsertMaterial", material.id, "audio_path:", audioPath ? "已设置" : "null");
+    console.log("[Sync] upsertMaterial", material.id, "audio_path:", audioPath || "(保持不变)");
     return row;
   },
 
@@ -314,9 +323,15 @@ Sync.pushLocalAll = async function (existingIds) {
     try {
       const id = r.id;
       if (!id) continue;
-      if (skip && skip.has(id)) continue;
       const material = r.material || {};
       const blob = r.audioBlob || null;
+      // 关键修复：有本地音频的材料绝不跳过！即使云端已有该材料，
+      // 也需要重新 upsert 以确保音频上传到 Storage 并更新 audio_path。
+      // （之前逻辑：云端已存在就跳过，导致音频永远传不上去）
+      if (skip && skip.has(id) && !blob) {
+        console.log("[Sync] pushLocalAll 跳过（云端已有且本地无新音频）:", id);
+        continue;
+      }
       console.log("[Sync] pushLocalAll 推送:", id, "有音频:", !!blob);
       var result = await Sync.upsertMaterial({
         id: id,
