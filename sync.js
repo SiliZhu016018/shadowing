@@ -84,6 +84,9 @@ const Sync = {
       c.from("user_settings").select("*").eq("user_id", uid).maybeSingle(),
     ]);
 
+    // 诊断：打印 Supabase 返回的原始 materials 数据
+    console.log("[Sync] fetchAll 原始数据:", JSON.stringify(m.data || []));
+
     const materials = (m.data || []).map(function (row) {
       return {
         id: row.id, userId: row.user_id, title: row.title, audioName: row.audio_name,
