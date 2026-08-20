@@ -301,16 +301,24 @@ Sync.applyCloudDataToLocal = async function (data) {
 Sync.pushLocalAll = async function (existingIds) {
   if (!Sync.isAuthed()) return;
   let rows = [];
-  try { rows = (await window._idbGetAll()) || []; } catch (e) { return; }
+  try { rows = (await window._idbGetAll()) || []; } catch (e) {
+    console.error("[Sync] pushLocalAll _idbGetAll 失败", e);
+    if (window.toast) window.toast("❌ 读取本地材料失败");
+    return;
+  }
+  console.log("[Sync] pushLocalAll 本地材料数:", rows.length, "→ IDs:", rows.map(function(r){return r.id;}));
+  if (!rows.length) { console.log("[Sync] pushLocalAll 本地无材料，跳过"); return; }
   const skip = existingIds instanceof Set ? existingIds : null;
+  let uploaded = 0, failed = 0;
   for (const r of rows) {
     try {
       const id = r.id;
       if (!id) continue;
-      if (skip && skip.has(id)) continue;   // 云端已有：不回写，避免用本地旧版本覆盖云端新版本
+      if (skip && skip.has(id)) continue;
       const material = r.material || {};
       const blob = r.audioBlob || null;
-      await Sync.upsertMaterial({
+      console.log("[Sync] pushLocalAll 推送:", id, "有音频:", !!blob);
+      var result = await Sync.upsertMaterial({
         id: id,
         title: (material.meta && material.meta.title) || id,
         audioName: (material.meta && material.meta.audio) || "audio.mp3",
@@ -318,6 +326,8 @@ Sync.pushLocalAll = async function (existingIds) {
         meta: material.meta || {},
         audioBlob: blob,
       });
+      console.log("[Sync] pushLocalAll 推送成功:", id, "audio_path:", result && result.audio_path);
+      uploaded++;
       try {
         const vb = JSON.parse(localStorage.getItem("shadowing:vocab:" + id) || "[]");
         if (vb && vb.length) await Sync.upsertVocab(id, vb);
@@ -327,8 +337,14 @@ Sync.pushLocalAll = async function (existingIds) {
         const hd = JSON.parse(localStorage.getItem("shadowing:hard:" + id) || "[]");
         if (pr && (pr.played || pr.lastIndex)) await Sync.upsertProgress(id, pr.played || [], hd || [], pr.lastIndex || 0);
       } catch (e) {}
-    } catch (e) { console.warn("[Sync] pushLocalOne failed", r && r.id, e); }
+    } catch (e) {
+      failed++;
+      console.error("[Sync] pushLocalOne FAILED", r && r.id, e);
+      if (window.toast) window.toast("❌ 上传失败: " + (e && e.message || String(e)));
+    }
   }
+  console.log("[Sync] pushLocalAll 完成: 成功 " + uploaded + ", 失败 " + failed);
+  if (window.toast && uploaded > 0) window.toast("✅ 已上传 " + uploaded + " 个材料到云端" + (failed ? " (" + failed + " 个失败)" : ""));
 };
 
 // ============================================================
@@ -443,15 +459,18 @@ Sync.mountAccountButton = function () {
           if (!_user) { Sync.openAuth(); return; }
           btn.disabled = true;
           btn.textContent = "⏳";
+          if (window.toast) window.toast("🔄 正在同步...");
           // 优先用页面自定义的 syncPullAll（index.html 有完整刷新逻辑），否则走基础 pull
           var p = typeof window.syncPullAll === "function"
             ? window.syncPullAll()
             : Sync.pullFromCloud().then(function (d) {
                 if (d && d.materials) {
-                  if (typeof window.toast === "function") window.toast("已同步 " + d.materials.length + " 个材料");
+                  if (typeof window.toast === "function") window.toast("✅ 已同步 " + d.materials.length + " 个材料");
                   else alert("已同步 " + d.materials.length + " 个材料");
                   if (typeof window.loadVocab === "function") window.loadVocab();
                   if (typeof window.renderList === "function") window.renderList();
+                } else {
+                  if (typeof window.toast === "function") window.toast("⚠️ 云端无材料（本地材料将自动上传）");
                 }
               });
           var done = false;
