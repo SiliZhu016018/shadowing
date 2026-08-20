@@ -1,5 +1,5 @@
 /* Shadowing English Service Worker — 离线缓存 */
-const CACHE = "shadowing-v2";
+const CACHE = "shadowing-v3";
 const CORE = [
   "./",
   "./index.html",
