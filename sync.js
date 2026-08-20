@@ -91,6 +91,7 @@ const Sync = {
         createdAt: row.created_at, updatedAt: row.updated_at,
       };
     });
+    console.log("[Sync] fetchAll → 云端材料数:", materials.length, materials.map(function (x) { return x.id + (x.audioPath ? "(有音频)" : "(无音频)"); }));
     const vocab = {};
     (v.data || []).forEach(function (r) {
       if (!vocab[r.material_id]) vocab[r.material_id] = [];
@@ -146,6 +147,12 @@ const Sync = {
       const { error: upErr } = await c.storage.from("audio")
         .upload(audioPath, material.audioBlob, { upsert: true, contentType: "audio/mpeg" });
       if (upErr) throw upErr;
+    } else if (!audioPath) {
+      // 本地没有音频 blob，也没记录云端路径：先查云端是否已有该材料的音频，避免把已有音频覆盖成 null
+      try {
+        const { data: ex } = await c.from("materials").select("audio_path").eq("id", material.id).eq("user_id", uid).maybeSingle();
+        if (ex && ex.audio_path) audioPath = ex.audio_path;
+      } catch (e) { console.warn("[Sync] 读取已有 audio_path 失败", e); }
     }
 
     const row = {
@@ -155,6 +162,7 @@ const Sync = {
     };
     const { error } = await c.from("materials").upsert(row);
     if (error) throw error;
+    console.log("[Sync] upsertMaterial", material.id, "audio_path:", audioPath ? "已设置" : "null");
     return row;
   },
 
@@ -222,6 +230,7 @@ const Sync = {
     if (!data) return null;
     await Sync.applyCloudDataToLocal(data);
     const cloudIds = new Set((data.materials || []).map(function (m) { return m.id; }));
+    console.log("[Sync] pullFromCloud cloudIds:", Array.from(cloudIds));
     await Sync.pushLocalAll(cloudIds);
     return data;
   },
@@ -255,15 +264,21 @@ const Sync = {
 Sync.applyCloudDataToLocal = async function (data) {
   if (!data) return;
   // 合并模式：只把云端有的材料写回本地（按 id 覆盖），绝不删除本地独有材料 —— 防止「云端空 → 清空本地」的数据丢失
-  // 写入云端 materials（含音频）；云端音频下载失败时保留本地已有音频，避免丢失
+  // 云端音频路径带进 meta，播放时直接用签名 URL（无需下载 blob，跨设备更稳）；同时把 blob 也存一份作为离线兜底
   for (const m of (data.materials || [])) {
+    const mat = {
+      sentences: m.sentences || [],
+      meta: Object.assign({}, m.meta || {}, { audioPath: m.audioPath || null }),
+      title: m.title,
+      audio: m.audioName,
+    };
     let blob = null;
     if (m.audioPath) {
       try { const buf = await Sync.downloadAudio(m.audioPath); blob = new Blob([buf], { type: "audio/mpeg" }); }
       catch (e) { console.warn("[Sync] downloadAudio failed", m.id, e); }
     }
     if (!blob) { try { const ex = await window._idbGet(m.id); if (ex) blob = ex.audioBlob || null; } catch (e) {} }
-    try { await window._idbPut(m.id, { sentences: m.sentences || [], meta: m.meta || {}, title: m.title, audio: m.audioName }, blob); }
+    try { await window._idbPut(m.id, mat, blob); }
     catch (e) { console.warn("[Sync] put material failed", m.id, e); }
   }
   // 写入 vocab

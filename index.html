@@ -763,11 +763,22 @@
     state.playingIndex = null;
     state.recordings = {};
     state.lastIndex = 0;
-    if (audioSrc && audioSrc.url) {
+    // 音频源优先级：云端签名 URL（跨设备最稳）＞ 本地 objectURL/blob
+    var audioPath = (audioSrc && audioSrc.path) || (state.meta && state.meta.audioPath) || null;
+    if (audioPath && window.Sync && Sync.isAuthed()) {
+      Sync.audioUrl(audioPath).then(function (url) {
+        if (url) { audio.src = url; state.audioUrl = url; }
+        else if (audioSrc && audioSrc.url) { audio.src = audioSrc.url; state.audioUrl = audioSrc.url; }
+        else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
+      }).catch(function (e) {
+        console.warn("[audioUrl] 获取失败，回退本地", e);
+        if (audioSrc && audioSrc.url) { audio.src = audioSrc.url; state.audioUrl = audioSrc.url; }
+        else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
+      });
+    } else if (audioSrc && audioSrc.url) {
       audio.src = audioSrc.url;
       state.audioUrl = audioSrc.url;
     } else {
-      // 无音频时不清空 src（避免原生播放器显示"错误"），而是移除 src 让播放器显示空白态
       audio.removeAttribute("src");
       audio.load();
       state.audioUrl = null;
@@ -2783,48 +2794,32 @@ document.getElementById("mk-run").addEventListener("click", async function () {
 <script src="sync.js"></script>
 <script>
 
-// 后台异步从云端补拉音频（当本地 IndexedDB 有材料句子但缺少 audioBlob 时调用）
-// 拉到后自动更新 IndexedDB + 当前播放器，无感恢复音频功能
+// 后台从云端获取音频播放地址（签名 URL，无需下载 blob），设置到播放器
 function tryFetchCloudAudio(materialId) {
   if (!materialId || !window.Sync || !Sync.isAuthed()) return;
-  // 立即更新 UI 提示用户正在拉取音频
   if (state.materialId === materialId && state.sentences && state.sentences.length && !audio.src) {
     var infoEl = document.querySelector(".player-info");
     if (infoEl) infoEl.textContent = "⏳ 音频加载中...";
   }
-  toast("正在从云端下载音频...");
+  toast("正在从云端获取音频...");
   Sync.fetchAll().then(function (data) {
-    if (!data || !data.materials) {
-      toast("云端无材料数据"); return;
-    }
+    if (!data || !data.materials) { toast("云端无材料数据"); return; }
     var m = data.materials.find(function (x) { return x.id === materialId; });
     if (!m) { toast("云端未找到该材料"); return; }
-    if (!m.audioPath) {
-      toast("该材料暂无云端音频（需在电脑端重新上传原始音频）"); return;
-    }
-    return Sync.downloadAudio(m.audioPath).then(function (blob) {
-      // downloadAudio 返回的已是 Blob，无需再包
-      if (!(blob instanceof Blob)) {
-        console.warn("[tryFetchCloudAudio] 返回非 Blob", typeof blob); return;
+    if (!m.audioPath) { toast("该材料暂无云端音频（需在电脑端重新上传原始音频）"); return; }
+    return Sync.audioUrl(m.audioPath).then(function (url) {
+      if (!url) { toast("获取音频地址失败，请重试"); return; }
+      audio.src = url;
+      state.audioUrl = url;
+      if (state.materialId === materialId && state.sentences && state.sentences.length) {
+        var infoEl2 = document.querySelector(".player-info");
+        if (infoEl2) infoEl2.textContent = "";
+        toast("✅ 音频已加载，可以播放了");
       }
-      // 更新 IndexedDB
-      return window._idbGet(materialId).then(function (row) {
-        if (!row || !row.material) return;
-        return window._idbPut(materialId, row.material, blob).then(function () {
-          // 如果当前正在显示这个材料，更新播放器
-          if (state.materialId === materialId && state.sentences && state.sentences.length) {
-            var url = URL.createObjectURL(blob);
-            audio.src = url;
-            state.audioBlob = blob;
-            state.audioUrl = url;
-            toast("✅ 音频已加载，可以播放了");
-          }
-        });
-      });
     });
   }).catch(function (err) {
-    console.warn("[tryFetchCloudAudio] 后台拉取音频失败", materialId, err);
-    toast("❌ 音频下载失败：" + (err && err.message || String(err)));
+    console.warn("[tryFetchCloudAudio] 失败", materialId, err);
+    toast("❌ 音频获取失败：" + (err && err.message || String(err)));
   });
 }
 
@@ -2857,9 +2852,12 @@ function syncPullAll() {
     if (lastId) {
       _idbGet(lastId).then(function (row) {
         if (row && row.material && row.material.sentences && row.material.sentences.length) {
-          if (row.audioBlob) {
-            var url = URL.createObjectURL(row.audioBlob);
-            loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+          var ap = (row.material.meta && row.material.meta.audioPath) || null;
+          var localUrl = row.audioBlob ? URL.createObjectURL(row.audioBlob) : null;
+          if (ap) {
+            loadMaterial(row.material, { path: ap, url: localUrl, name: (row.material.meta && row.material.meta.audio) || "audio" });
+          } else if (localUrl) {
+            loadMaterial(row.material, { url: localUrl, name: (row.material.meta && row.material.meta.audio) || "audio" });
           } else {
             loadMaterial(row.material, null);
             tryFetchCloudAudio(lastId);
