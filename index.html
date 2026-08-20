@@ -766,6 +766,7 @@
     // 音频源优先级：云端签名 URL（跨设备最稳）＞ 本地 objectURL/blob
     var audioPath = (audioSrc && audioSrc.path) || (state.meta && state.meta.audioPath) || null;
     if (audioPath && window.Sync && Sync.isAuthed()) {
+      // Sync 已就绪：直接获取签名 URL
       Sync.audioUrl(audioPath).then(function (url) {
         if (url) { audio.src = url; state.audioUrl = url; }
         else if (audioSrc && audioSrc.url) { audio.src = audioSrc.url; state.audioUrl = audioSrc.url; }
@@ -775,6 +776,15 @@
         if (audioSrc && audioSrc.url) { audio.src = audioSrc.url; state.audioUrl = audioSrc.url; }
         else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
       });
+    } else if (audioPath && window.Sync) {
+      // 有 audioPath 但 Sync 还没就绪（登录中）：先不设 src，等 Sync 就绪后由 ensureCloudAudio 补拉
+      console.log("[loadMaterial] 有 audioPath 但 Sync 未就绪，等待:", audioPath);
+      audio.removeAttribute("src");
+      audio.load();
+      state.audioUrl = null;
+      // 标记需要补拉音频，Sync 就绪后自动处理
+      state._pendingAudioPath = audioPath;
+      state._pendingMaterialId = state.materialId;
     } else if (audioSrc && audioSrc.url) {
       audio.src = audioSrc.url;
       state.audioUrl = audioSrc.url;
@@ -2796,16 +2806,28 @@ document.getElementById("mk-run").addEventListener("click", async function () {
 
 // 后台从云端获取音频播放地址（签名 URL，无需下载 blob），设置到播放器
 function tryFetchCloudAudio(materialId) {
-  if (!materialId || !window.Sync || !Sync.isAuthed()) return;
+  if (!materialId) return;
+  // Sync 还没就绪（页面刚加载时 Sync.init() 尚未完成）：不放弃，注册回调等登录后自动重试
+  if (!window.Sync || !Sync.isAuthed()) {
+    console.log("[tryFetchCloudAudio] Sync 未就绪，等待初始化后重试 materialId=", materialId);
+    if (window.Sync) {
+      Sync.onAuthChange(function (u) { if (u) tryFetchCloudAudio(materialId); });
+    }
+    var infoEl = document.querySelector(".player-info");
+    if (infoEl && state.materialId === materialId) infoEl.textContent = "⏳ 等待同步...";
+    return;
+  }
   if (state.materialId === materialId && state.sentences && state.sentences.length && !audio.src) {
     var infoEl = document.querySelector(".player-info");
     if (infoEl) infoEl.textContent = "⏳ 音频加载中...";
   }
+  console.log("[tryFetchCloudAudio] 正在获取云端音频 materialId=", materialId);
   toast("正在从云端获取音频...");
   Sync.fetchAll().then(function (data) {
     if (!data || !data.materials) { toast("云端无材料数据"); return; }
     var m = data.materials.find(function (x) { return x.id === materialId; });
     if (!m) { toast("云端未找到该材料"); return; }
+    console.log("[tryFetchCloudAudio] 云端材料 audioPath:", m.audioPath);
     if (!m.audioPath) { toast("该材料暂无云端音频（需在电脑端重新上传原始音频）"); return; }
     return Sync.audioUrl(m.audioPath).then(function (url) {
       if (!url) { toast("获取音频地址失败，请重试"); return; }
@@ -2834,13 +2856,40 @@ if ("serviceWorker" in navigator) {
 window.addEventListener("DOMContentLoaded", function () {
   Sync.init().then(function () {
     Sync.mountAccountButton();
-    if (Sync.isAuthed()) syncPullAll();
+    if (Sync.isAuthed()) syncPullAll().then(function () {
+      // 同步完成后，检查当前材料是否需要补拉音频（处理 loadMaterial 先于 Sync 就绪的竞态）
+      ensureCloudAudio();
+    }); else {
+      // 未登录但也检查一下（可能有 pending 的 audioPath）
+      ensureCloudAudio();
+    }
   });
 });
 // 登录成功后拉取
 window.onSyncSignedIn = function () {
-  syncPullAll();
+  syncPullAll().then(function () { ensureCloudAudio(); });
 };
+// Sync 就绪后补拉当前材料的云端音频（解决页面加载时序竞态）
+function ensureCloudAudio() {
+  if (!state.materialId || !state.sentences || !state.sentences.length) return;
+  if (audio.src && state.audioUrl) return; // 已有音频，不需要
+  var ap = state._pendingAudioPath || (state.meta && state.meta.audioPath) || null;
+  if (ap && window.Sync && Sync.isAuthed()) {
+    console.log("[ensureCloudAudio] 补拉音频:", ap);
+    state._pendingAudioPath = null;
+    Sync.audioUrl(ap).then(function (url) {
+      if (!url) { console.warn("[ensureCloudAudio] 签名 URL 为空"); return; }
+      audio.src = url;
+      state.audioUrl = url;
+      toast("✅ 音频已加载");
+      var infoEl = document.querySelector(".player-info");
+      if (infoEl) infoEl.textContent = "";
+    }).catch(function (e) { console.warn("[ensureCloudAudio] 失败", e); });
+  } else if (ap) {
+    // 有 audioPath 但还没登录：等登录后再试
+    console.log("[ensureCloudAudio] 有 audioPath 但未登录，等待:", ap);
+  }
+}
 function syncPullAll() {
   return Sync.pullFromCloud().then(function (data) {
     if (!data) return;
