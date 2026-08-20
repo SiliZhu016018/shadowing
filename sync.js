@@ -166,7 +166,9 @@ const Sync = {
     var row = {
       id: material.id, user_id: uid, title: material.title,
       audio_name: material.audioName,
-      sentences: material.sentences, meta: material.meta || {},
+      sentences: material.sentences,
+      // 同步更新 meta.audioPath，保持数据库顶层字段与 meta 嵌套字段一致
+      meta: Object.assign({}, material.meta || {}, { audioPath: audioPath || (material.meta && material.meta.audioPath) || null }),
     };
     // 只有确认有有效音频路径时才写入 audio_path 字段
     if (audioPath) {
