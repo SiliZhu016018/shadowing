@@ -727,8 +727,45 @@ function doPull() {
   Sync.pullFromCloud().then(function (data) {
     if (!data) return;
     toast("已同步 " + (data.materials || []).length + " 个材料的生词");
-    loadAllEntries().then(renderList);
+    loadAllEntries().then(function () {
+      // 兜底：IndexedDB 为空时（手机 Safari 私有模式），直接从云端数据渲染生词
+      if (!STATE.entries.length && (data.vocab && Object.keys(data.vocab).length)) {
+        renderCloudVocab(data);
+      } else {
+        renderList();
+      }
+    });
   }).catch(function (err) { console.warn("[sync pull]", err); });
+}
+
+// 云端兜底渲染：不依赖 IndexedDB，直接用 fetchAll 返回的数据构建词条（Safari 私有模式写入失败时使用）
+function renderCloudVocab(data) {
+  var allEntries = [];
+  var materials = (data.materials || []);
+  materials.forEach(function (m) {
+    var vocabArr = (data.vocab && data.vocab[m.id]) || [];
+    vocabArr.forEach(function (v, i) {
+      normalizeVocabItem(v);
+      allEntries.push({
+        materialId: m.id,
+        materialTitle: m.title || m.id,
+        materialMeta: m.meta || {},
+        materialSentences: m.sentences || [],
+        idx: i,
+        word: v.word, note: v.note, example: v.example,
+        srcSentenceIdx: v.srcSentenceIdx, srcText: v.srcText,
+        level: v.level, reps: v.reps, due: v.due, lastReview: v.lastReview, lastGrade: v.lastGrade
+      });
+    });
+  });
+  STATE.entries = allEntries;
+  STATE.materials = materials.map(function (m) {
+    return { id: m.id, material: { sentences: m.sentences || [], meta: Object.assign({}, m.meta || {}, { title: m.title }) }, updatedAt: m.updatedAt ? new Date(m.updatedAt).getTime() : 0 };
+  });
+  populateMaterialFilter();
+  updateStats();
+  renderList();
+  console.log("[renderCloudVocab] 从云端渲染了", allEntries.length, "条生词");
 }
 </script>
 </body>
