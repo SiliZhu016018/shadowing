@@ -195,9 +195,30 @@ const Sync = {
   async upsertVocab(materialId, vocabArray) {
     const c = await _loadClient(); if (!c || !_user) throw new Error("未登录");
     const uid = _uid();
-    await c.from("vocab").delete().eq("material_id", materialId).eq("user_id", uid);
-    if (!vocabArray || !vocabArray.length) return;
-    const rows = vocabArray.map(function (v) {
+    // 合并式上传：先拉云端该 material 已有的生词，与本次要上传的合并（按 word+createdAt 去重），再整体写回。
+    // 避免「delete 全删 → 只插本地」导致其他设备（如电脑端）的生词被覆盖丢失。
+    let cloudArr = [];
+    try {
+      const { data: existing } = await c.from("vocab").select("*").eq("user_id", uid).eq("material_id", materialId);
+      cloudArr = (existing || []).map(function (r) {
+        return {
+          word: r.word, note: r.note, example: r.example,
+          srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
+          level: r.level, reps: r.reps, due: r.due,
+          lastReview: r.last_review, lastGrade: r.last_grade,
+          createdAt: r.created_at, updatedAt: r.updated_at,
+        };
+      });
+    } catch (e) { console.warn("[upsertVocab] 读取云端失败，仅上传本地", e); }
+    const merged = cloudArr.slice();
+    const keys = new Set(cloudArr.map(function (v) { return (v.word || "") + "::" + (v.createdAt || ""); }));
+    for (const v of (vocabArray || [])) {
+      const k = (v.word || "") + "::" + (v.createdAt || "");
+      if (!keys.has(k)) merged.push(v);
+    }
+    await c.from("vocab").delete().eq("user_id", uid).eq("material_id", materialId);
+    if (!merged.length) return;
+    const rows = merged.map(function (v) {
       return {
         user_id: uid, material_id: materialId,
         word: v.word || "", note: v.note || "", example: v.example || "",
@@ -268,6 +289,34 @@ const Sync = {
   async uploadVocab(materialId, vocabArr) {
     if (!Sync.isAuthed()) return;
     await Sync.upsertVocab(materialId, vocabArr);
+  },
+  // 仅从云端拉取某材料的生词并合并进本地（不触发材料上传/渲染），用于打开材料时即时同步
+  async pullVocabOnly(materialId) {
+    if (!Sync.isAuthed() || !materialId) return;
+    const c = await _loadClient(); if (!c || !_user) return;
+    const uid = _uid();
+    const { data, error } = await c.from("vocab").select("*").eq("user_id", uid).eq("material_id", materialId);
+    if (error || !data) { console.warn("[pullVocabOnly] 失败", error); return; }
+    const cloudArr = data.map(function (r) {
+      return {
+        word: r.word, note: r.note, example: r.example,
+        srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
+        level: r.level, reps: r.reps, due: r.due,
+        lastReview: r.last_review, lastGrade: r.last_grade,
+        createdAt: r.created_at, updatedAt: r.updated_at,
+      };
+    });
+    const key = "shadowing:vocab:" + materialId;
+    let local = [];
+    try { local = JSON.parse(localStorage.getItem(key) || "[]"); } catch (_) { local = []; }
+    const merged = cloudArr.slice();
+    const keys = new Set(cloudArr.map(function (v) { return (v.word || "") + "::" + (v.createdAt || ""); }));
+    for (const lv of local) {
+      const lk = (lv.word || "") + "::" + (lv.createdAt || "");
+      if (!keys.has(lk)) merged.push(lv);
+    }
+    localStorage.setItem(key, JSON.stringify(merged));
+    console.log("[pullVocabOnly] 已合并", merged.length, "个生词到", materialId);
   },
 
   // 上传某材料的学习进度

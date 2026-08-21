@@ -760,9 +760,13 @@
       toast("sentences.json 格式不正确"); return;
     }
     state.meta = jsonObj.meta || {};
+    // 把顶层 title 并入 meta，确保保存回本地/云端时 title 一致（materialId 统一基于 title，跨设备 key 才能对齐）
+    if (jsonObj.title) state.meta.title = jsonObj.title;
+    if (!state.meta.title && jsonObj.id) state.meta.title = jsonObj.id;
     state.sentences = jsonObj.sentences;
     state.audioBlob = (audioSrc && audioSrc.blob) || state.audioBlob || null;
-    state.materialId = sanitizeId(state.meta.title || (audioSrc && audioSrc.name) || "material");
+    // materialId 统一优先级：云端真实 id > 云端 title > 本地 meta.title > 音频名 > 默认
+    state.materialId = sanitizeId(jsonObj.id || jsonObj.title || state.meta.title || (audioSrc && audioSrc.name) || "material");
     state.playingIndex = null;
     state.recordings = {};
     state.lastIndex = 0;
@@ -807,6 +811,10 @@
     toast("已载入 " + state.sentences.length + " 句");
     // 云端同步：上传当前材料（含音频）+ 记 lastMaterial
     if (typeof syncUploadCurrentMaterial === "function") syncUploadCurrentMaterial();
+    // 打开材料后主动从云端同步一次生词（解决跨设备同步延迟 / 启动时序问题，确保能看到其他设备加的词）
+    if (window.Sync && typeof Sync.pullVocabOnly === "function" && Sync.isAuthed() && state.materialId) {
+      Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
+    }
   };
 
   // ---------- 渲染列表 ----------
