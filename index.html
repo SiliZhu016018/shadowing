@@ -1497,7 +1497,6 @@
         }
         return false;
       });
-      });
     }).then(function (loaded) {
       // 本地没找到时，尝试从云端直接加载（Safari 私有模式 IndexedDB 写入失败的兜底）
       if (!loaded && (urlMaterialId || lastId) && window.Sync && Sync.isAuthed()) {
@@ -2997,6 +2996,7 @@ function syncUploadProgressDebounced() {
       .catch(function (err) { console.warn("[sync upload progress]", err); });
   }, 1500);
 }
+})();
 </script>
 </body>
 </html>
