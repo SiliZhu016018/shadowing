@@ -304,9 +304,26 @@ Sync.applyCloudDataToLocal = async function (data) {
     }
     catch (e) { console.warn("[Sync] put material failed", m.id, e); }
   }
-  // 写入 vocab
+  // 写入 vocab（合并模式：不丢本地新增的词）
+  // 直接覆盖会导致"手机刚加的词被云端旧数据覆盖"的问题
   for (const [mid, arr] of Object.entries(data.vocab || {})) {
-    try { localStorage.setItem("shadowing:vocab:" + mid, JSON.stringify(arr)); } catch (e) {}
+    try {
+      const key = "shadowing:vocab:" + mid;
+      const localRaw = localStorage.getItem(key);
+      let local = [];
+      if (localRaw) { try { local = JSON.parse(localRaw); } catch (_) { local = []; } }
+      // 合并：以 word+createdAt 为唯一标识，两边取并集
+      const merged = arr.slice(); // 先用云端数据作为基础
+      const cloudKeys = new Set(arr.map(function (v) { return (v.word || "") + "::" + (v.createdAt || ""); }));
+      for (const lv of local) {
+        const lk = (lv.word || "") + "::" + (lv.createdAt || "");
+        if (!cloudKeys.has(lk)) {
+          merged.push(lv); // 本地有但云端没有的词，保留
+        }
+      }
+      localStorage.setItem(key, JSON.stringify(merged));
+      console.log("[Sync] vocab 合并写入:", mid, "云端", arr.length, "+ 本地新增", merged.length - arr.length, "=", merged.length);
+    } catch (e) { console.warn("[Sync] vocab merge failed", mid, e); }
   }
   // 写入 progress
   for (const [mid, p] of Object.entries(data.progress || {})) {

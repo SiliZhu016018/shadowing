@@ -1116,6 +1116,8 @@
       } else {
         toast("分段已更新（音频未缓存，刷新可能丢失）");
       }
+      // 关键修复：编辑分段后必须同步到云端，否则手机端拉到的还是旧分段（断句不匹配）
+      if (typeof syncUploadCurrentMaterial === "function") syncUploadCurrentMaterial();
       loadVocab(); // 句子结构变化后，按词模糊重新绑定生词来源
     }
     renderList();
@@ -2987,14 +2989,30 @@ function syncUploadCurrentMaterial() {
 }
 
 // 防抖上传生词（每 1.5 秒）
+// 修复：Sync 未就绪时不丢弃，等登录/初始化完成后再上传
 var _vocabUploadT = null;
+var _pendingVocabUpload = false;  // 标记有待上传的生词
 function syncUploadVocabDebounced() {
-  if (!Sync.isAuthed() || !state.materialId) return;
+  if (!state.materialId) return;
+  _pendingVocabUpload = true;
   clearTimeout(_vocabUploadT);
   _vocabUploadT = setTimeout(function () {
+    if (!Sync.isAuthed()) {
+      // Sync 未登录：不报错，等用户登录后由 pullFromCloud 合并
+      console.log("[sync vocab] 未登录，跳过上传（数据已存本地）");
+      return;
+    }
+    _pendingVocabUpload = false;
     Sync.uploadVocab(state.materialId, state.vocab || []).catch(function (err) { console.warn("[sync upload vocab]", err); });
   }, 1500);
 }
+// Sync 登录后补传待上传的生词
+window.addEventListener("sync-signed-in", function () {
+  if (_pendingVocabUpload && state.materialId && state.vocab.length) {
+    _pendingVocabUpload = false;
+    Sync.uploadVocab(state.materialId, state.vocab).catch(function (err) { console.warn("[sync vocab after signin]", err); });
+  }
+});
 // 防抖上传进度
 var _progUploadT = null;
 function syncUploadProgressDebounced() {
