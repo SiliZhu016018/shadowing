@@ -529,3 +529,104 @@ Sync.mountAccountButton = function () {
 };
 
 window.Sync = Sync;
+
+/* ========== Safari 兜底：library.html 内联 JS 解析失败时直接渲染 ========== */
+// Safari 某些情况下 library.html 内联脚本会报 SyntaxError 导致整个 <script> 块不执行
+// 此函数在 sync.js 加载后运行，不依赖 library.html 的任何内联代码
+(function () {
+  // 只在材料库页生效
+  var wrap = document.getElementById("list-wrap");
+  if (!wrap) return;
+
+  console.log("[sync-safari-fallback] 检测到材料库页，准备兜底渲染");
+
+  // 工具函数
+  function esc(s) {
+    if (s == null) return "";
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function toast(msg) {
+    var t = document.getElementById("toast");
+    if (!t) { try { if (window.toast) window.toast(msg); } catch(e){} return; }
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { t.classList.remove("show"); }, 2000);
+  }
+
+  // 渲染云端材料列表
+  window.renderCloudList = function (materials) {
+    if (!wrap) wrap = document.getElementById("list-wrap");
+    if (!materials || !materials.length) {
+      wrap.innerHTML = '<div style="background:var(--panel,#fff);border:1px dashed rgba(15,23,42,.12);border-radius:18px;padding:40px 16px;text-align:center;color:#64748b;text-align:center"><div style="font-size:36px;margin-bottom:8px">☁️</div>云端暂无材料<br><small>先去「生成材料」页面拖入 MP3 音频开始第一份</small></div>';
+      return;
+    }
+    var html = '<div style="display:flex;flex-direction:column;gap:12px">';
+    for (var i = 0; i < materials.length; i++) {
+      var m = materials[i];
+      var meta = m.meta || {};
+      var title = m.title || meta.title || m.id;
+      var sentCount = (m.sentences && m.sentences.length) || 0;
+      var audioName = m.audioName || meta.audio || "";
+      var dateStr = m.updatedAt ? new Date(m.updatedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" }) : "";
+
+      html += '<div style="background:#fff;border:1px solid rgba(15,23,42,.06);border-radius:18px;padding:16px 18px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;cursor:pointer;transition:transform .18s,box-shadow .18s" onclick="window.location.href=\'index.html?material=\' + encodeURIComponent(\'' + esc(m.id) + '\')">' +
+        '<div>' +
+          '<div style="font-size:16px;font-weight:700;margin-bottom:4px;word-break:break-word">' + esc(title) + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:12.5px;color:#64748b">' +
+            '<span style="background:#f9fafc;border:1px solid rgba(15,23,42,.06);border-radius:999px;padding:1px 9px">' + sentCount + ' 句</span>' +
+            (audioName ? '<span style="background:#f9fafc;border:1px solid rgba(15,23,42,.06);border-radius:999px;padding:1px 9px">' + esc(audioName) + '</span>' : '') +
+            (dateStr ? '<span style="background:#f9fafc;border:1px solid rgba(15,23,42,.06);border-radius:999px;padding:1px 9px">' + dateStr + '</span>' : '') +
+            (m.audioPath ? '<span style="background:rgba(34,197,94,.06);border-color:rgba(16,185,129,.35);color:#10b981;border-radius:999px;padding:1px 9px">🎵 有音频</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">' +
+          '<button style="font-size:12.5px;padding:5px 11px;border-radius:9px;cursor:pointer;background:linear-gradient(135deg,#3b82f6 0%,#6366f1 100%);color:#fff;border:none;font-weight:600;box-shadow:0 8px 28px rgba(59,130,246,.3)" onclick="event.stopPropagation();window.location.href=\'index.html?material=\' + encodeURIComponent(\'' + esc(m.id) + '\')">▶ 打开跟读</button>' +
+        '</div>' +
+      '</div>';
+    }
+    html += '</div>';
+    wrap.innerHTML = html;
+
+    // 更新统计
+    var statTotal = document.getElementById("stat-total");
+    if (statTotal) statTotal.textContent = materials.length;
+    var statStarted = document.getElementById("stat-started");
+    if (statStarted) statStarted.textContent = materials.length;
+
+    console.log("[sync-safari-fallback] 兜底渲染了", materials.length, "个材料");
+  };
+
+  // 如果 Sync 已就绪且已登录，立即拉取并渲染
+  if (Sync.isAuthed()) {
+    console.log("[sync-safari-fallback] 已登录，立即拉取云端数据");
+    Sync.fetchAll().then(function (data) {
+      if (data && data.materials && data.materials.length) {
+        window.renderCloudList(data.materials);
+        toast("✅ 已同步 " + data.materials.length + " 个材料");
+      } else {
+        wrap.innerHTML = '<div style="background:#fff;border:1px dashed rgba(15,23,42,.12);border-radius:18px;padding:40px 16px;text-align:center;color:#64748b"><div style="font-size:36px;margin-bottom:8px">📭</div>还没有保存的材料<br><small>先去「生成材料」页面拖入 MP3 音频开始第一份</small></div>';
+      }
+    }).catch(function (err) {
+      console.warn("[sync-safari-fallback] 拉取失败", err);
+    });
+  } else {
+    console.log("[sync-safari-fallback] 未登录，等待登录后渲染");
+    // 显示空状态
+    wrap.innerHTML = '<div style="background:#fff;border:1px dashed rgba(15,23,42,.12);border-radius:18px;padding:40px 16px;text-align:center;color:#64748b"><div style="font-size:36px;margin-bottom:8px">🔒</div>请先登录以同步材料<br><small>点击右上角「登录同步」按钮</small></div>';
+  }
+
+  // 监听登录事件
+  window.onSyncSignedIn = function () {
+    console.log("[sync-safari-fallback] 检测到登录，拉取云端数据");
+    Sync.fetchAll().then(function (data) {
+      if (data && data.materials && data.materials.length) {
+        window.renderCloudList(data.materials);
+        toast("✅ 已同步 " + data.materials.length + " 个材料");
+      }
+    }).catch(function (err) {
+      console.warn("[sync-safari-fallback] 登录后拉取失败", err);
+    });
+  };
+})();
