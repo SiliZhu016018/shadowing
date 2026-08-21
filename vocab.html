@@ -763,6 +763,7 @@ function doPull() {
 // 云端兜底渲染：不依赖 IndexedDB，直接用 fetchAll 返回的数据构建词条（Safari 私有模式写入失败时使用）
 function renderCloudVocab(data) {
   var allEntries = [];
+  var seenWords = new Set(); // 按 word 去重（防止云端有重复数据）
   var materials = (data.materials || []);
   materials.forEach(function (m) {
     // 标题优先级：meta.title > title > id（避免显示音频文件名或 UUID）
@@ -774,6 +775,9 @@ function renderCloudVocab(data) {
     var vocabArr = (data.vocab && data.vocab[m.id]) || [];
     vocabArr.forEach(function (v, i) {
       normalizeVocabItem(v);
+      var wKey = (v.word || "").toLowerCase().trim();
+      if (!wKey || seenWords.has(wKey)) return; // 跳过重复词
+      seenWords.add(wKey);
       allEntries.push({
         materialId: m.id,
         materialTitle: matTitle,
@@ -795,7 +799,7 @@ function renderCloudVocab(data) {
   populateMaterialFilter();
   updateStats();
   renderList();
-  console.log("[renderCloudVocab] 从云端渲染了", allEntries.length, "条生词");
+  console.log("[renderCloudVocab] 从云端渲染了", allEntries.length, "条生词（去重后）");
 }
 </script>
 </body>

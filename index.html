@@ -2918,17 +2918,29 @@ if ("serviceWorker" in navigator) {
 window.addEventListener("DOMContentLoaded", function () {
   Sync.init().then(function () {
     Sync.mountAccountButton();
-    if (Sync.isAuthed()) syncPullAll().then(function () {
-      // 同步完成后，检查当前材料是否需要补拉音频（处理 loadMaterial 先于 Sync 就绪的竞态）
-      ensureCloudAudio();
-    }); else {
+    if (Sync.isAuthed()) {
+      // 登录已就绪：补传可能排队的本地材料（含正确音频），再拉云端
+      if (_pendingMaterialUpload) syncUploadCurrentMaterial();
+      syncPullAll().then(function () {
+        // 同步完成后，检查当前材料是否需要补拉音频（处理 loadMaterial 先于 Sync 就绪的竞态）
+        ensureCloudAudio();
+      });
+    } else {
       // 未登录但也检查一下（可能有 pending 的 audioPath）
       ensureCloudAudio();
+      // 登录完成后补传本地音频 + 拉云端
+      Sync.onAuthChange(function (u) {
+        if (u) {
+          if (_pendingMaterialUpload) syncUploadCurrentMaterial();
+          syncPullAll().then(function () { ensureCloudAudio(); });
+        }
+      });
     }
   });
 });
 // 登录成功后拉取
 window.onSyncSignedIn = function () {
+  if (_pendingMaterialUpload) syncUploadCurrentMaterial();
   syncPullAll().then(function () { ensureCloudAudio(); });
 };
 // Sync 就绪后补拉当前材料的云端音频（解决页面加载时序竞态）
@@ -2952,6 +2964,53 @@ function ensureCloudAudio() {
     console.log("[ensureCloudAudio] 有 audioPath 但未登录，等待:", ap);
   }
 }
+// 跨设备即时同步：切回页面 / 获得焦点时，拉取当前材料最新句子+音频+生词
+// 无论手机还是电脑编辑了分段，另一端切回来就能立刻看到最新内容
+var _lastFocusPull = 0;
+function syncPullCurrentMaterial() {
+  if (!window.Sync || !Sync.isAuthed() || !state.materialId) return Promise.resolve(false);
+  if (audio && !audio.paused) return Promise.resolve(false); // 播放中不打断
+  return Sync.fetchAll().then(function (data) {
+    if (!data || !data.materials) return false;
+    var m = data.materials.find(function (x) { return x.id === state.materialId; });
+    if (!m) return false;
+    var changed = false;
+    var cloudSentences = m.sentences || [];
+    var sig = function (arr) {
+      return JSON.stringify((arr || []).map(function (s) {
+        return (s.text || "") + "@" + (s.start != null ? s.start : "") + "@" + (s.end != null ? s.end : "");
+      }));
+    };
+    if (sig(cloudSentences) !== sig(state.sentences)) {
+      state.sentences = cloudSentences;
+      state.meta = Object.assign({}, state.meta, { audioPath: m.audioPath || null, title: m.title });
+      if (!state.meta.title) state.meta.title = m.title;
+      renderList(); updateProgress();
+      changed = true;
+    }
+    var curPath = state.meta && state.meta.audioPath;
+    if (m.audioPath && m.audioPath !== curPath && (!audio.src)) {
+      Sync.audioUrl(m.audioPath).then(function (url) {
+        if (url) { audio.src = url; state.audioUrl = url; state.meta.audioPath = m.audioPath; }
+      });
+      changed = true;
+    }
+    if (changed) toast("已同步最新内容");
+    return changed;
+  }).catch(function (e) { console.warn("[syncPullCurrentMaterial]", e); return false; });
+}
+function maybeFocusPull() {
+  var now = Date.now();
+  if (now - _lastFocusPull < 2000) return;
+  _lastFocusPull = now;
+  syncPullCurrentMaterial().then(function (c) {
+    if (c && window.Sync && Sync.isAuthed() && state.materialId && typeof Sync.pullVocabOnly === "function") {
+      Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function () {});
+    }
+  });
+}
+document.addEventListener("visibilitychange", function () { if (!document.hidden) maybeFocusPull(); });
+window.addEventListener("focus", maybeFocusPull);
 function syncPullAll() {
   return Sync.pullFromCloud().then(function (data) {
     if (!data) return;
@@ -2986,9 +3045,19 @@ function syncPullAll() {
 }
 
 // 上传当前正在用的材料到云端（含音频 + sentences）
+// 上传当前材料到云端；Sync 未就绪时排队，登录后自动补传（不再静默丢弃）
+// 关键：带 audioBlob 上传，确保云端音频与本机播放的是同一份（修复跨设备断句错位）
+var _pendingMaterialUpload = false;
 function syncUploadCurrentMaterial() {
-  if (!Sync.isAuthed() || !state.materialId) return;
+  if (!state.materialId) return;
+  if (!Sync.isAuthed()) {
+    _pendingMaterialUpload = true;
+    console.log("[sync upload material] Sync 未就绪，排队等待（materialId=" + state.materialId + "）");
+    return;
+  }
+  _pendingMaterialUpload = false;
   var audioBlob = state.audioBlob || null;
+  console.log("[sync upload material] 上传 materialId=" + state.materialId + "，含音频：" + (!!audioBlob));
   Sync.uploadMaterial(
     state.materialId, audioBlob,
     state.sentences || [], state.meta || {},

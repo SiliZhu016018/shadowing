@@ -195,7 +195,7 @@ const Sync = {
   async upsertVocab(materialId, vocabArray) {
     const c = await _loadClient(); if (!c || !_user) throw new Error("未登录");
     const uid = _uid();
-    // 合并式上传：先拉云端该 material 已有的生词，与本次要上传的合并（按 word+createdAt 去重），再整体写回。
+    // 合并式上传：先拉云端该 material 已有的生词，与本次要上传的合并（按 word 去重），再整体写回。
     // 避免「delete 全删 → 只插本地」导致其他设备（如电脑端）的生词被覆盖丢失。
     let cloudArr = [];
     try {
@@ -210,11 +210,25 @@ const Sync = {
         };
       });
     } catch (e) { console.warn("[upsertVocab] 读取云端失败，仅上传本地", e); }
-    const merged = cloudArr.slice();
-    const keys = new Set(cloudArr.map(function (v) { return (v.word || "") + "::" + (v.createdAt || ""); }));
+    // 按 word（小写）去重合并：同一材料同一词只保留一条，本地版本覆盖云端旧版
+    const merged = [];
+    const seen = new Set();
+    // 先加入云端词条
+    for (const cv of cloudArr) {
+      const k = (cv.word || "").toLowerCase().trim();
+      if (!k) continue;
+      if (!seen.has(k)) { seen.add(k); merged.push(cv); }
+    }
+    // 再加入/覆盖本地词条（本地优先，因为是最新的）
     for (const v of (vocabArray || [])) {
-      const k = (v.word || "") + "::" + (v.createdAt || "");
-      if (!keys.has(k)) merged.push(v);
+      const k = (v.word || "").toLowerCase().trim();
+      if (!k) continue;
+      if (!seen.has(k)) { seen.add(k); merged.push(v); }
+      else {
+        // 同词已存在 → 用本地版本覆盖（更新 note/example 等）
+        const idx = merged.findIndex(function (m) { return (m.word || "").toLowerCase().trim() === k; });
+        if (idx >= 0) merged[idx] = Object.assign(merged[idx], v);
+      }
     }
     await c.from("vocab").delete().eq("user_id", uid).eq("material_id", materialId);
     if (!merged.length) return;
@@ -309,11 +323,19 @@ const Sync = {
     const key = "shadowing:vocab:" + materialId;
     let local = [];
     try { local = JSON.parse(localStorage.getItem(key) || "[]"); } catch (_) { local = []; }
-    const merged = cloudArr.slice();
-    const keys = new Set(cloudArr.map(function (v) { return (v.word || "") + "::" + (v.createdAt || ""); }));
+    // 按 word（小写）去重合并
+    const merged = [];
+    const seen = new Set();
+    for (const cv of cloudArr) {
+      const k = (cv.word || "").toLowerCase().trim();
+      if (!k) continue;
+      if (!seen.has(k)) { seen.add(k); merged.push(cv); }
+    }
     for (const lv of local) {
-      const lk = (lv.word || "") + "::" + (lv.createdAt || "");
-      if (!keys.has(lk)) merged.push(lv);
+      const lk = (lv.word || "").toLowerCase().trim();
+      if (!lk || seen.has(lk)) continue;
+      seen.add(lk);
+      merged.push(lv);
     }
     localStorage.setItem(key, JSON.stringify(merged));
     console.log("[pullVocabOnly] 已合并", merged.length, "个生词到", materialId);
@@ -361,17 +383,24 @@ Sync.applyCloudDataToLocal = async function (data) {
       const localRaw = localStorage.getItem(key);
       let local = [];
       if (localRaw) { try { local = JSON.parse(localRaw); } catch (_) { local = []; } }
-      // 合并：以 word+createdAt 为唯一标识，两边取并集
-      const merged = arr.slice(); // 先用云端数据作为基础
-      const cloudKeys = new Set(arr.map(function (v) { return (v.word || "") + "::" + (v.createdAt || ""); }));
+      // 合并：以 word（小写）为唯一标识，两边取并集（同一材料同一词只保留一条，以云端版本为准）
+      const merged = [];
+      const seen = new Set();
+      // 先加入云端词条（作为权威源）
+      for (const cv of arr) {
+        const k = (cv.word || "").toLowerCase().trim();
+        if (!k) continue;
+        if (!seen.has(k)) { seen.add(k); merged.push(cv); }
+      }
+      // 再加入本地有但云端没有的词
       for (const lv of local) {
-        const lk = (lv.word || "") + "::" + (lv.createdAt || "");
-        if (!cloudKeys.has(lk)) {
-          merged.push(lv); // 本地有但云端没有的词，保留
-        }
+        const lk = (lv.word || "").toLowerCase().trim();
+        if (!lk || seen.has(lk)) continue;
+        seen.add(lk);
+        merged.push(lv);
       }
       localStorage.setItem(key, JSON.stringify(merged));
-      console.log("[Sync] vocab 合并写入:", mid, "云端", arr.length, "+ 本地新增", merged.length - arr.length, "=", merged.length);
+      console.log("[Sync] vocab 合并写入:", mid, "云端去重", arr.length, "+ 本地新增", merged.length - Math.min(arr.length, merged.length), "=", merged.length);
     } catch (e) { console.warn("[Sync] vocab merge failed", mid, e); }
   }
   // 写入 progress
