@@ -1466,7 +1466,9 @@
           // 有音频就直接用，没有也先加载句子（后台异步补拉）
           if (row.audioBlob) {
             var url = URL.createObjectURL(row.audioBlob);
-            loadMaterial(row.material, { url: url, name: (row.material.meta && row.material.meta.audio) || "audio" });
+            // 关键修复：必须把 blob 一并传入，否则 state.audioBlob 为 null，
+            // 后续同步只会传句子、不传音频，导致云端 audio_path 指向旧音频 → 手机端断句与音频错位
+            loadMaterial(row.material, { url: url, blob: row.audioBlob, name: (row.material.meta && row.material.meta.audio) || "audio" });
           } else {
             loadMaterial(row.material, null);
             tryFetchCloudAudio(lastId);  // 后台尝试从云端拉音频
@@ -1490,7 +1492,8 @@
           state.activeMaterialId = latest.id;
           if (latest.audioBlob) {
             var url = URL.createObjectURL(latest.audioBlob);
-            loadMaterial(latest.material, { url: url, name: (latest.material.meta && latest.material.meta.audio) || "audio" });
+            // 同上：传入 blob，确保 state.audioBlob 正确填充，同步时能把正确音频上传云端
+            loadMaterial(latest.material, { url: url, blob: latest.audioBlob, name: (latest.material.meta && latest.material.meta.audio) || "audio" });
           } else {
             loadMaterial(latest.material, null);
             tryFetchCloudAudio(latest.id);
