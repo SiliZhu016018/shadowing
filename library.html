@@ -103,7 +103,7 @@
   .lib-card.current { border-left: 4px solid var(--ok); }
   .lib-card .lib-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; word-break: break-word; }
   .lib-card .lib-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--muted); }
-  .lib-card .lib-meta .m-pill { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; }
+  .lib-card .lib-meta .m-pill { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lib-card .lib-meta .m-due { color: var(--rec); border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
   .lib-card .lib-meta .m-progress { display: inline-flex; align-items: center; gap: 6px; }
   .lib-card .lib-meta .m-progress .m-bar { width: 80px; height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
@@ -139,11 +139,19 @@
     .app-nav { gap: 4px; padding: 8px 10px; flex-wrap: wrap; }
     .app-nav .brand .brand-text { display: none; }
     .app-nav .nav-item { padding: 5px 9px; font-size: 12.5px; }
+    .lib-card { padding: 12px 14px; gap: 8px; }
+    .lib-card .lib-title { font-size: 15px; }
+    .lib-card .lib-meta { gap: 6px; font-size: 12px; flex-wrap: wrap; }
+    .lib-card .lib-meta .m-pill { max-width: 120px; font-size: 11.5px; }
+    .lib-card .lib-actions button { font-size: 11.5px; padding: 4px 9px; }
   }
   @media (max-width: 540px) {
     .wrap { padding: 16px 12px 60px; }
-    .lib-card { grid-template-columns: 1fr; }
-    .lib-card .lib-actions { flex-direction: row; }
+    .lib-card { grid-template-columns: 1fr; padding: 12px; }
+    .lib-card .lib-actions { flex-direction: row; justify-content: flex-end; }
+    /* Safari 兜底模块渲染的卡片也适配手机 */
+    #list-wrap > div[style*="grid"] { grid-template-columns: 1fr !important; padding: 12px !important; }
+    #list-wrap > div[style*="grid"] > div:first-child { max-width: 100%; overflow: hidden; }
   }
 </style>
 </head>

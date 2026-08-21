@@ -91,11 +91,13 @@
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 10px 14px; box-shadow: var(--shadow-1); margin-bottom: 16px;
+    overflow-x: hidden;
   }
-  .filter-bar label { font-size: 12.5px; color: var(--muted); margin-right: 4px; }
+  .filter-bar label { font-size: 12.5px; color: var(--muted); margin-right: 4px; flex-shrink: 0; }
   .filter-bar select, .filter-bar input {
     font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 9px;
     border: 1px solid var(--border-strong); background: var(--panel-2); color: var(--text);
+    min-width: 0;
   }
   .filter-bar input:focus, .filter-bar select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .filter-bar .filter-chip {
@@ -122,11 +124,11 @@
   .vp-item:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
   .vp-item .vp-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
   .vp-item .vp-word { font-size: 17px; font-weight: 700; color: var(--accent); word-break: break-word; }
-  .vp-item .vp-src-tag { font-size: 11.5px; background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(59,130,246,.30); border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+  .vp-item .vp-src-tag { font-size: 11.5px; background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(59,130,246,.30); border-radius: 999px; padding: 1px 9px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
   .vp-item .vp-src-tag.missing { background: rgba(239,68,68,.08); color: var(--rec); border-color: rgba(239,68,68,.35); cursor: not-allowed; }
   .vp-item .vp-note { font-size: 13.5px; color: var(--text); margin: 4px 0; line-height: 1.55; }
   .vp-item .vp-example { font-size: 12.5px; color: var(--muted); font-style: italic; border-left: 2px solid var(--accent-soft); padding-left: 8px; margin: 4px 0; }
-  .vp-item .vp-src-txt { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+  .vp-item .vp-src-txt { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.45; word-break: break-word; }
   .vp-item .vp-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
 
   /* 听原句：胶囊渐变按钮 */
@@ -210,10 +212,18 @@
     .app-nav { gap: 4px; padding: 8px 10px; flex-wrap: wrap; }
     .app-nav .brand .brand-text { display: none; }
     .app-nav .nav-item { padding: 5px 9px; font-size: 12.5px; }
+    .filter-bar { padding: 8px 10px; gap: 6px; }
+    .filter-bar label { font-size: 11.5px; }
+    .filter-bar select { font-size: 12px; padding: 4px 8px; max-width: 140px; }
+    .filter-bar .filter-chip { font-size: 11.5px; padding: 3px 8px; }
+    .filter-bar input { min-width: 0; flex: 1 1 100%; }
+    .stat-card { padding: 10px 12px; }
+    .stat-card .stat-num { font-size: 20px; }
   }
   @media (max-width: 540px) {
     .wrap { padding: 16px 12px 60px; }
     header.page-hd { flex-direction: column; align-items: flex-start; }
+    .stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   }
 </style>
 </head>
@@ -755,12 +765,18 @@ function renderCloudVocab(data) {
   var allEntries = [];
   var materials = (data.materials || []);
   materials.forEach(function (m) {
+    // 标题优先级：meta.title > title > id（避免显示音频文件名或 UUID）
+    var matTitle = (m.meta && m.meta.title) || m.title || m.id;
+    // 如果 title 看起来像文件名（含 .mp3/.m4a 等），回退到 meta.title 或 id
+    if (/\.(mp3|m4a|wav|ogg|aac|flac)/i.test(matTitle)) {
+      matTitle = (m.meta && m.meta.title) || "材料";
+    }
     var vocabArr = (data.vocab && data.vocab[m.id]) || [];
     vocabArr.forEach(function (v, i) {
       normalizeVocabItem(v);
       allEntries.push({
         materialId: m.id,
-        materialTitle: m.title || m.id,
+        materialTitle: matTitle,
         materialMeta: m.meta || {},
         materialSentences: m.sentences || [],
         idx: i,
@@ -772,7 +788,9 @@ function renderCloudVocab(data) {
   });
   STATE.entries = allEntries;
   STATE.materials = materials.map(function (m) {
-    return { id: m.id, material: { sentences: m.sentences || [], meta: Object.assign({}, m.meta || {}, { title: m.title }) }, updatedAt: m.updatedAt ? new Date(m.updatedAt).getTime() : 0 };
+    var t = (m.meta && m.meta.title) || m.title || "材料";
+    if (/\.(mp3|m4a|wav|ogg|aac|flac)/i.test(t)) t = (m.meta && m.meta.title) || "材料";
+    return { id: m.id, material: { sentences: m.sentences || [], meta: Object.assign({}, m.meta || {}, { title: t }) }, updatedAt: m.updatedAt ? new Date(m.updatedAt).getTime() : 0 };
   });
   populateMaterialFilter();
   updateStats();

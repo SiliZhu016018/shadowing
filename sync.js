@@ -244,7 +244,8 @@ const Sync = {
     if (!data) return null;
     await Sync.applyCloudDataToLocal(data);
     // 云端渲染兜底：即使 IndexedDB 写入失败（如 Safari 私有模式），列表也能从云端显示
-    if (typeof window.renderCloudList === "function" && data.materials && data.materials.length) {
+    // 仅在材料库页（library.html）执行，避免污染 vocab.html 的 #list-wrap
+    if (typeof window.renderCloudList === "function" && data.materials && data.materials.length && !document.getElementById("stat-total")) {
       try { window.renderCloudList(data.materials); } catch (e) { console.warn("[Sync] renderCloudList 失败", e); }
     }
     const cloudIds = new Set((data.materials || []).map(function (m) { return m.id; }));
@@ -531,9 +532,13 @@ Sync.mountAccountButton = function () {
 window.Sync = Sync;
 
 /* ========== Safari 兜底：library.html 内联 JS 解析失败时直接渲染 ========== */
-// Safari 某些情况下 library.html 内联脚本会报 SyntaxError 导致整个 <script> 块不执行
-// 此函数在 sync.js 加载后运行，不依赖 library.html 的任何内联代码
+// 只在材料库页（library.html）生效，不污染 vocab.html / index.html
 (function () {
+  // 排除非材料库页面：vocab.html 有 #review-area 和 #stat-total
+  if (document.getElementById("review-area") || document.getElementById("stat-total")) {
+    console.log("[sync-safari-fallback] 跳过：当前不是材料库页");
+    return;
+  }
   // 只在材料库页生效
   var wrap = document.getElementById("list-wrap");
   if (!wrap) return;

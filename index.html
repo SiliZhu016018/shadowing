@@ -2149,29 +2149,38 @@
 
   // 选中文字 → 弹出「+ 生词」按钮
   let selTimer = null;
+  function checkSelection() {
+    if (window.state && window.state.editMode) { hideSelPopup(); return; }
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) { hideSelPopup(); return; }
+    const txt = sel.toString().trim();
+    // 必须是在句子列表区域内的选中，且选中的是有效文本
+    if (txt.length < 1 || txt.length > 80) { hideSelPopup(); return; }
+    const range = sel.getRangeAt(0);
+    const container = range.commonAncestorContainer;
+    const rowEl = container.nodeType === 1 ? container.closest(".row") : (container.parentElement ? container.parentElement.closest(".row") : null);
+    if (!rowEl) { hideSelPopup(); return; }
+
+    // 计算位置：在选区末尾附近显示
+    const rect = range.getBoundingClientRect();
+    selPopup.style.left = (rect.right + window.scrollX - 4) + "px";
+    selPopup.style.top = (rect.bottom + window.scrollY + 6) + "px";
+    selPopup.classList.add("show");
+    // 记录来源句子索引
+    selPopup._srcIdx = parseInt(rowEl.dataset.id, 10);
+    selPopup._srcText = txt;
+  }
   document.addEventListener("mouseup", function (e) {
     if (window.state && window.state.editMode) { hideSelPopup(); return; }
     // 延迟一点等 selection 更新
     clearTimeout(selTimer);
-    selTimer = setTimeout(function () {
-      const sel = window.getSelection();
-      const txt = sel.toString().trim();
-      // 必须是在句子列表区域内的选中，且选中的是有效文本
-      if (txt.length < 1 || txt.length > 80) { hideSelPopup(); return; }
-      const range = sel.getRangeAt(0);
-      const container = range.commonAncestorContainer;
-      const rowEl = container.nodeType === 1 ? container.closest(".row") : container.parentElement ? container.parentElement.closest(".row") : null;
-      if (!rowEl) { hideSelPopup(); return; }
-
-      // 计算位置：在选区末尾附近显示
-      const rect = range.getBoundingClientRect();
-      selPopup.style.left = (rect.right + window.scrollX - 4) + "px";
-      selPopup.style.top = (rect.bottom + window.scrollY + 6) + "px";
-      selPopup.classList.add("show");
-      // 记录来源句子索引
-      selPopup._srcIdx = parseInt(rowEl.dataset.id, 10);
-      selPopup._srcText = txt;
-    }, 10);
+    selTimer = setTimeout(checkSelection, 10);
+  });
+  // 手机端：长按选词后触发 selectionchange（mouseup 在触屏不触发）
+  document.addEventListener("selectionchange", function () {
+    if (window.state && window.state.editMode) { hideSelPopup(); return; }
+    clearTimeout(selTimer);
+    selTimer = setTimeout(checkSelection, 200);
   });
 
   function hideSelPopup() { selPopup.classList.remove("show"); selPopup._srcIdx = null; selPopup._srcText = ""; }
