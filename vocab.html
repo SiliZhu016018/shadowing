@@ -703,9 +703,10 @@ function bindFilterBar() {
 }
 
 /* ========== 启动 ========== */
+// 注意：首次渲染延迟到同步完成后执行，避免 IndexedDB 为空时先闪"空状态"再被云端数据覆盖（手机 Safari 私有模式问题）
 document.addEventListener("DOMContentLoaded", function () {
   bindFilterBar();
-  loadAllEntries().then(renderList);
+  // 不在这里立即渲染，等下面的同步处理器统一处理
 });
 </script>
 <script src="sync.js"></script>
@@ -719,14 +720,21 @@ if ("serviceWorker" in navigator) {
 window.addEventListener("DOMContentLoaded", function () {
   Sync.init().then(function () {
     Sync.mountAccountButton();
-    if (Sync.isAuthed()) doPull();
+    if (Sync.isAuthed()) {
+      // 已登录：拉云端数据后渲染（含兜底逻辑）
+      doPull();
+    } else {
+      // 未登录：直接从本地 IndexedDB 渲染
+      loadAllEntries().then(renderList);
+    }
   });
 });
 window.onSyncSignedIn = function () { doPull(); };
 function doPull() {
   Sync.pullFromCloud().then(function (data) {
-    if (!data) return;
-    toast("已同步 " + (data.materials || []).length + " 个材料的生词");
+    if (data && (data.materials || []).length) {
+      toast("已同步 " + (data.materials || []).length + " 个材料的生词");
+    }
     loadAllEntries().then(function () {
       // 兜底：IndexedDB 为空时（手机 Safari 私有模式），直接从云端数据渲染生词
       if (!STATE.entries.length && (data.vocab && Object.keys(data.vocab).length)) {
@@ -735,7 +743,11 @@ function doPull() {
         renderList();
       }
     });
-  }).catch(function (err) { console.warn("[sync pull]", err); });
+  }).catch(function (err) {
+    console.warn("[sync pull]", err);
+    // 云端失败时也要渲染本地数据，不能让页面空白
+    loadAllEntries().then(renderList);
+  });
 }
 
 // 云端兜底渲染：不依赖 IndexedDB，直接用 fetchAll 返回的数据构建词条（Safari 私有模式写入失败时使用）
