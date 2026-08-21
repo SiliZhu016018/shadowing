@@ -235,6 +235,9 @@ window._idbPut = function (id, material, blob) {
       req.onerror = function () { console.error("[_idbPut] req.error:", req.error); rej(req.error); };
       tx.onabort = function () { console.error("[_idbPut] tx.abort, error:", tx.error); rej(tx.error || new Error("transaction aborted")); };
       tx.onerror = function (e) { console.error("[_idbPut] tx.error event:", e); };
+    });
+  });
+};
 window._idbDelete = idbDelete;
 
 /* ========== 工具 ========== */
