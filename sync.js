@@ -353,6 +353,44 @@ const Sync = {
   clearAudioSynced(materialId) {
     try { localStorage.removeItem("shadowing:audio_synced:" + materialId); } catch (_) {}
   },
+
+  // ⚡ 紧急清理：一键删除云端+本地所有材料数据（用于清除残留/死循环）
+  // 用法：控制台输入 __nuke__() 回车
+  async nukeAll() {
+    if (!Sync.isAuthed()) return { ok: false, msg: "请先登录同步账号" };
+    var uid = _uid();
+    var results = { deletedCloud: 0, deletedLocal: 0, errors: [] };
+    try {
+      // 1. 删云端 materials + vocab + progress
+      var [mRes, vRes, pRes] = await Promise.all([
+        c.from("materials").delete().eq("user_id", uid),
+        c.from("vocab").delete().eq("user_id", uid),
+        c.from("progress").delete().eq("user_id", uid),
+      ]);
+      if (mRes.error) results.errors.push("materials: " + mRes.error.message);
+      else results.deletedCloud += (mRes.count || 0);
+      if (vRes.error) results.errors.push("vocab: " + vRes.error.message);
+      if (pRes.error) results.errors.push("progress: " + pRes.error.message);
+    } catch (e) { results.errors.push("云端删除异常: " + e.message); }
+    // 2. 删本地 IndexedDB 所有材料
+    try {
+      if (window._idbAll) {
+        var rows = await window._idbAll();
+        for (var i = 0; i < rows.length; i++) {
+          try { await window._idbDelete(rows[i].id); results.deletedLocal++; } catch (_) {}
+        }
+      }
+    } catch (e) { results.errors.push("本地删除异常: " + e.message); }
+    // 3. 清理 localStorage 标记
+    try {
+      localStorage.removeItem("shadowing:last_material");
+      localStorage.removeItem("shadowing:deleted_ids");
+    } catch (_) {}
+    results.ok = true;
+    results.msg = "云端删 " + results.deletedCloud + " 条，本地删 " + results.deletedLocal + " 个";
+    if (results.errors.length) results.msg += "，错误: " + results.errors.join("; ");
+    return results;
+  },
 };
 
 // 把云端 fetchAll 返回的数据写入本地
@@ -741,4 +779,7 @@ window.Sync = Sync;
       console.warn("[sync-safari-fallback] 登录后拉取失败", err);
     });
   };
+
+  // 全局快捷：控制台输入 __nuke__() 即可一键清空云端+本地所有材料
+  window.__nuke = function () { return Sync.nukeAll(); };
 })();
