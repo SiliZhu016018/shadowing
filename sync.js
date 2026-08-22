@@ -355,17 +355,19 @@ const Sync = {
   },
 
   // ⚡ 紧急清理：一键删除云端+本地所有材料数据（用于清除残留/死循环）
-  // 用法：控制台输入 __nuke__() 回车
+  // 用法：控制台输入 __nuke__() 回车，或点材料库的「🧹 清除」按钮
   async nukeAll() {
     if (!Sync.isAuthed()) return { ok: false, msg: "请先登录同步账号" };
+    var client = await _loadClient();
+    if (!client) return { ok: false, msg: "Supabase 客户端未就绪" };
     var uid = _uid();
     var results = { deletedCloud: 0, deletedLocal: 0, errors: [] };
     try {
       // 1. 删云端 materials + vocab + progress
       var [mRes, vRes, pRes] = await Promise.all([
-        c.from("materials").delete().eq("user_id", uid),
-        c.from("vocab").delete().eq("user_id", uid),
-        c.from("progress").delete().eq("user_id", uid),
+        client.from("materials").delete().eq("user_id", uid),
+        client.from("vocab").delete().eq("user_id", uid),
+        client.from("progress").delete().eq("user_id", uid),
       ]);
       if (mRes.error) results.errors.push("materials: " + mRes.error.message);
       else results.deletedCloud += (mRes.count || 0);

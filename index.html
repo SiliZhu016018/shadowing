@@ -609,6 +609,7 @@
   <div class="vp-header">
     <span>📚 材料库</span>
     <span id="lib-count" style="font-size:12px;color:var(--muted);font-weight:400;">0 个材料</span>
+    <button id="lib-nuke-all" style="font-size:11px;padding:2px 8px;border:1px solid var(--rec);color:var(--rec);border-radius:6px;background:transparent;cursor:pointer;margin-right:4px;" title="删除云端+本地所有材料数据">🧹 清除</button>
     <button class="vp-close" id="lib-close" aria-label="关闭">&times;</button>
   </div>
   <div class="vp-body" id="lib-body">
@@ -2195,6 +2196,47 @@
   // 「材料库」按钮已移到顶部导航（library.html 独立页面），不再保留侧栏触发器
   libOverlay.addEventListener("click", closeLibrary);
   document.getElementById("lib-close").addEventListener("click", closeLibrary);
+
+  // 🧹 清除全部按钮：一键删除云端+本地所有材料
+  var nukeBtn = document.getElementById("lib-nuke-all");
+  if (nukeBtn) {
+    nukeBtn.addEventListener("click", function () {
+      if (!window.Sync || !Sync.isAuthed()) { toast("请先登录同步账号"); return; }
+      if (!confirm("确定要删除云端和本地的全部材料数据吗？此操作不可撤销！")) return;
+      nukeBtn.disabled = true;
+      nukeBtn.textContent = "删除中…";
+      // 直接用 Supabase client 删云端 + 清本地
+      Sync.fetchAll().then(function (data) {
+        var mats = (data && data.materials) || [];
+        var promises = [];
+        mats.forEach(function (m) {
+          promises.push(Sync.deleteMaterial(m.id, m.audioPath || null).catch(function(e){console.warn("删云端失败:",m.id,e)}));
+          promises.push(window._idbDelete(m.id).catch(function(){}));
+        });
+        return Promise.all(promises);
+      }).then(function () {
+        // 清 localStorage 标记
+        try { localStorage.removeItem("shadowing:last_material"); localStorage.removeItem("shadowing:deleted_ids"); } catch(_) {}
+        // 验证
+        return Sync.fetchAll();
+      }).then(function (d2) {
+        var remaining = (d2 && d2.materials) || [];
+        if (remaining.length === 0) {
+          toast("✅ 云端+本地已全部清除！");
+          renderLibrary();
+        } else {
+          toast("⚠️ 云端仍有 " + remaining.length + " 个（可能 RLS 策略阻止）");
+          console.warn("[nuke] 剩余材料:", remaining);
+        }
+      }).catch(function (err) {
+        toast("清除出错: " + (err.message || err));
+        console.error("[nuke]", err);
+      }).finally(function () {
+        nukeBtn.disabled = false;
+        nukeBtn.textContent = "🧹 清除";
+      });
+    });
+  }
 
   // loadMaterial 时更新 activeMaterialId（已合并到下方统一包装器中）
 
