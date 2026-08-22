@@ -291,8 +291,8 @@ const Sync = {
 
   // 上传一个材料（含音频 blob）到云端
   async uploadMaterial(materialId, audioBlob, sentences, meta, title, audioName) {
-    if (!Sync.isAuthed()) return;
-    await Sync.upsertMaterial({
+    if (!Sync.isAuthed()) return null;
+    return await Sync.upsertMaterial({
       id: materialId, title: title || materialId,
       audioName: audioName, sentences: sentences,
       meta: meta || {}, audioBlob: audioBlob || null,
@@ -348,28 +348,35 @@ const Sync = {
       played: playedArr || [], hard: hardArr || [], lastIndex: lastIndex || 0,
     });
   },
+
+  // 清除某材料的「音频已同步」标记，下次同步会重新上传音频（用于重新生成、或手动删了云端音频后补救）
+  clearAudioSynced(materialId) {
+    try { localStorage.removeItem("shadowing:audio_synced:" + materialId); } catch (_) {}
+  },
 };
 
 // 把云端 fetchAll 返回的数据写入本地
 Sync.applyCloudDataToLocal = async function (data) {
   if (!data) return;
+  // 跳过用户主动删除的材料 ID（防止云端残留数据又拉回本地）
+  var deletedIds = new Set();
+  try { deletedIds = new Set(JSON.parse(localStorage.getItem("shadowing:deleted_ids") || "[]")); } catch (_) {}
   // 合并模式：只把云端有的材料写回本地（按 id 覆盖），绝不删除本地独有材料 —— 防止「云端空 → 清空本地」的数据丢失
   // 云端音频路径带进 meta，播放时直接用签名 URL（无需下载 blob，跨设备更稳）；同时把 blob 也存一份作为离线兜底
   for (const m of (data.materials || [])) {
+    if (deletedIds.has(m.id)) { console.log("[Sync] applyCloudDataToLocal 跳过已删除材料:", m.id); continue; }
     const mat = {
       sentences: m.sentences || [],
       meta: Object.assign({}, m.meta || {}, { audioPath: m.audioPath || null }),
       title: m.title,
       audio: m.audioName,
     };
+    // 性能优化：同步阶段【不】从云端下载音频 blob（大文件，每次同步都下载会极慢）。
+    // 音频在「打开材料」时按需用签名 URL 播放；本地已有的 blob 仅作离线兜底，保留不删。
     let blob = null;
-    if (m.audioPath) {
-      try { const buf = await Sync.downloadAudio(m.audioPath); blob = new Blob([buf], { type: "audio/mpeg" }); }
-      catch (e) { console.warn("[Sync] downloadAudio failed", m.id, e); }
-    }
-    if (!blob) { try { const ex = await window._idbGet(m.id); if (ex) blob = ex.audioBlob || null; } catch (e) {} }
+    try { const ex = await window._idbGet(m.id); if (ex && ex.audioBlob) blob = ex.audioBlob; } catch (e) {}
     try {
-      console.log("[Sync] applyCloudDataToLocal 写入:", m.id, "audioPath:", m.audioPath || "(无)", "有blob:", !!blob);
+      console.log("[Sync] applyCloudDataToLocal 写入:", m.id, "audioPath:", m.audioPath || "(无)", "本地blob:", !!blob);
       await window._idbPut(m.id, mat, blob);
       console.log("[Sync] applyCloudDataToLocal 写入成功:", m.id);
     }
@@ -434,23 +441,28 @@ Sync.pushLocalAll = async function (existingIds) {
       if (!id) continue;
       const material = r.material || {};
       const blob = r.audioBlob || null;
-      // 关键修复：有本地音频的材料绝不跳过！即使云端已有该材料，
-      // 也需要重新 upsert 以确保音频上传到 Storage 并更新 audio_path。
-      // （之前逻辑：云端已存在就跳过，导致音频永远传不上去）
-      if (skip && skip.has(id) && !blob) {
+      // 性能优化：云端已有音频则跳过音频重传（避免每次刷新/切标签都重传数 MB 音频）。
+      // 仅在「本地标记为未同步」或「云端无 audio_path」时才上传。重新生成/手动删云端后会清除该标记。
+      var audioSynced = false;
+      try { audioSynced = localStorage.getItem("shadowing:audio_synced:" + id) === "1"; } catch (_) {}
+      const uploadBlob = !!blob && !audioSynced;
+      if (skip && skip.has(id) && !uploadBlob) {
         console.log("[Sync] pushLocalAll 跳过（云端已有且本地无新音频）:", id);
         continue;
       }
-      console.log("[Sync] pushLocalAll 推送:", id, "有音频:", !!blob);
+      console.log("[Sync] pushLocalAll 推送:", id, "有音频:", !!uploadBlob);
       var result = await Sync.upsertMaterial({
         id: id,
         title: (material.meta && material.meta.title) || id,
         audioName: (material.meta && material.meta.audio) || "audio.mp3",
         sentences: material.sentences || [],
         meta: material.meta || {},
-        audioBlob: blob,
+        audioBlob: uploadBlob ? blob : null,
       });
       console.log("[Sync] pushLocalAll 推送成功:", id, "audio_path:", result && result.audio_path);
+      if (uploadBlob && result && result.audio_path) {
+        try { localStorage.setItem("shadowing:audio_synced:" + id, "1"); } catch (_) {}
+      }
       uploaded++;
       try {
         const vb = JSON.parse(localStorage.getItem("shadowing:vocab:" + id) || "[]");

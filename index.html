@@ -2125,17 +2125,38 @@
             if (libRows[ri] && libRows[ri].id === delId) { targetRow = libRows[ri]; break; }
           }
           var audioPath = (targetRow && targetRow.material && targetRow.material.meta && targetRow.material.meta.audioPath) || null;
-          // 云端删除
-          if (window.Sync && Sync.isAuthed() && delId) {
+
+          // 记录"用户主动删除"的 ID，防止 applyCloudDataToLocal 又拉回来
+          window._deletedMaterialIds = window._deletedMaterialIds || new Set();
+          window._deletedMaterialIds.add(delId);
+          try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify([...window._deletedMaterialIds])); } catch(_) {}
+          // 清除音频同步标记，避免云端音频删掉后本地仍认为已同步而不重传
+          if (window.Sync && Sync.clearAudioSynced) Sync.clearAudioSynced(delId);
+
+          function doCloudDelete() {
+            if (!window.Sync || !Sync.isAuthed()) return;
             Sync.deleteMaterial(delId, audioPath).then(function () {
               console.log("[lib] 云端已删除:", delId);
+              // 成功后从已删记录中移除（可选，保留也无害）
             }).catch(function (e) {
-              console.warn("[lib] 云端删除失败（本地仍会删）:", e);
+              console.warn("[lib] 云端删除失败:", e);
+              toast("云端删除失败，请检查网络后重试");
             });
           }
-          // 本地删除
+
+          // 如果 Sync 已登录 → 立即删云端；否则等登录后再删
+          if (window.Sync && Sync.isAuthed()) {
+            doCloudDelete();
+          } else {
+            // 等待 Sync 登录完成再补删
+            if (window.Sync) {
+              Sync.onAuthChange(function (u) { if (u) doCloudDelete(); });
+            }
+            toast("本地已删除，等待同步账号连接后删除云端…");
+          }
+
+          // 本地删除（立即执行）
           _idbDelete(delId).then(function () {
-            toast("已删除（本地+云端）");
             renderLibrary();
           }).catch(function () {});
         });
@@ -2834,6 +2855,8 @@ document.getElementById("mk-run").addEventListener("click", async function () {
 
     // 持久化到 IndexedDB：音频 + 句子一并存，刷新后自动恢复，无需重新生成
     var mid = (window.state && window.state.materialId) || ("mat_" + Date.now());
+    // 新生成/重生成：清除音频同步标记，确保正确音频会被上传到云端（而非沿用旧标记跳过）
+    if (window.Sync && Sync.clearAudioSynced) Sync.clearAudioSynced(mid);
     window._idbPut(mid, material, audF).then(function () {
       console.log("[Shadowing] 材料已存入 IndexedDB（materialId=" + mid + "），刷新可自动恢复");
     }).catch(function (err) {
@@ -3074,13 +3097,20 @@ function syncUploadCurrentMaterial() {
   }
   _pendingMaterialUpload = false;
   var audioBlob = state.audioBlob || null;
-  console.log("[sync upload material] 上传 materialId=" + state.materialId + "，含音频：" + (!!audioBlob));
+  // 性能优化：仅首次/重新生成/云端音频被删时才传音频；分段编辑只传 sentences，不重传整段音频
+  var audioSynced = false;
+  try { audioSynced = localStorage.getItem("shadowing:audio_synced:" + state.materialId) === "1"; } catch (_) {}
+  var uploadBlob = !!audioBlob && !audioSynced;
+  console.log("[sync upload material] 上传 materialId=" + state.materialId + "，含音频：" + uploadBlob);
   Sync.uploadMaterial(
-    state.materialId, audioBlob,
+    state.materialId, uploadBlob ? audioBlob : null,
     state.sentences || [], state.meta || {},
     (state.meta && state.meta.title) || state.materialId,
     (state.meta && state.meta.audio) || "audio.mp3"
-  ).then(function () {
+  ).then(function (row) {
+    if (uploadBlob && row && row.audio_path) {
+      try { localStorage.setItem("shadowing:audio_synced:" + state.materialId, "1"); } catch (_) {}
+    }
     Sync.setLastMaterial(state.materialId);
   }).catch(function (err) { console.warn("[sync upload material]", err); });
 }
