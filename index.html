@@ -2079,6 +2079,7 @@
         return;
       }
       rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+      window._libRawRows = rows; // 保存原始行数据，删除时需要取 audioPath
       libCount.textContent = rows.length + " 个材料";
 
       let html = "";
@@ -2110,15 +2111,31 @@
         });
       });
 
-      // 删除按钮
+      // 删除按钮（同时删本地 + 云端，防止同步拉回）
       libBody.querySelectorAll("[data-del-lib]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var delId = btn.dataset.delLib;
           if (delId === state.activeMaterialId) {
             toast("不能删除当前正在使用的材料"); return;
           }
+          // 先从渲染数据中取 audioPath（用于云端音频删除）
+          var libRows = window._libRawRows || [];
+          var targetRow = null;
+          for (var ri = 0; ri < libRows.length; ri++) {
+            if (libRows[ri] && libRows[ri].id === delId) { targetRow = libRows[ri]; break; }
+          }
+          var audioPath = (targetRow && targetRow.material && targetRow.material.meta && targetRow.material.meta.audioPath) || null;
+          // 云端删除
+          if (window.Sync && Sync.isAuthed() && delId) {
+            Sync.deleteMaterial(delId, audioPath).then(function () {
+              console.log("[lib] 云端已删除:", delId);
+            }).catch(function (e) {
+              console.warn("[lib] 云端删除失败（本地仍会删）:", e);
+            });
+          }
+          // 本地删除
           _idbDelete(delId).then(function () {
-            toast("已删除");
+            toast("已删除（本地+云端）");
             renderLibrary();
           }).catch(function () {});
         });

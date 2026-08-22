@@ -40,8 +40,7 @@ self.addEventListener("fetch", function (e) {
     // 同源：网络优先（保证更新），离线回退缓存
     e.respondWith(
       fetch(req).then(function (res) {
-        const copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(req, copy); });
+        try { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req.url, copy); }); } catch (_) {}
         return res;
       }).catch(function () {
         return caches.match(req).then(function (m) { return m || caches.match("./index.html"); });
@@ -55,10 +54,7 @@ self.addEventListener("fetch", function (e) {
     caches.match(req).then(function (m) {
       if (m) return m;
       return fetch(req).then(function (res) {
-        try {
-          const copy = res.clone();
-          caches.open(CACHE).then(function (c) { c.put(req, copy); });
-        } catch (_) {}
+        try { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req.url, copy); }); } catch (_) {}
         return res;
       });
     })
