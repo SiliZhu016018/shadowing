@@ -434,7 +434,7 @@ function bindRowActions() {
         });
         return Promise.all(promises);
       }).then(function() {
-        try { localStorage.removeItem("shadowing:last_material"); localStorage.removeItem("shadowing:deleted_ids"); } catch(_) {}
+        try { localStorage.removeItem("shadowing:last_material"); localStorage.removeItem("shadowing:deleted_ids"); localStorage.removeItem("shadowing:lastMaterialId"); } catch(_) {}
         return Sync.fetchAll();
       }).then(function(d2) {
         var remaining = (d2 && d2.materials) || [];

@@ -1464,8 +1464,17 @@
     if (!isNaN(urlPlayIdx) && urlPlayIdx < 0) urlPlayIdx = NaN;
 
     // 尝试恢复上次使用的材料（优先）或最新的材料（兜底）
+    // ⚠️ 必须跳过用户已主动删除的材料 ID（shadowing:deleted_ids），否则删了又会自动恢复
+    var _deletedIds = new Set();
+    try { var _di = JSON.parse(localStorage.getItem("shadowing:deleted_ids") || "[]"); if (Array.isArray(_di)) _di.forEach(function(id){_deletedIds.add(id)}); } catch(_) {}
     var lastId = urlMaterialId || null;
     if (!lastId) { try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {} }
+    if (lastId && _deletedIds.has(lastId)) {
+      console.log("[启动] 跳过已删除材料的自动恢复:", lastId);
+      lastId = null;
+      try { localStorage.removeItem("shadowing:lastMaterialId"); } catch(_) {}
+      try { localStorage.removeItem("shadowing:last_material"); } catch(_) {}
+    }
 
     var restorePromise;
     if (lastId) {
@@ -1490,11 +1499,14 @@
       restorePromise = Promise.resolve(false);
     }
 
-    // 兜底：没有上次记录时，取最新的一条
+    // 兜底：没有上次记录时，取最新的一条（跳过已删除的）
     restorePromise.then(function (restored) {
       if (restored) return true;
       return _idbGetAll().then(function (rows) {
         if (!rows || !rows.length) return false;
+        // 过滤掉已删除的材料
+        rows = rows.filter(function (r) { return r && r.id && !_deletedIds.has(r.id); });
+        if (!rows.length) return false;
         rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
         var latest = rows[0];
         if (latest && latest.material && latest.material.sentences && latest.material.sentences.length) {
