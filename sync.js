@@ -201,32 +201,39 @@ const Sync = {
   },
 
   // 删除云端材料（数据 + Storage 音频）
+  // ⚠️ 顺序很关键：先写「已删除墓碑」再删云端行，避免竞态导致其他端把本地副本复活
   async deleteMaterial(materialId, audioPath) {
     const c = await _loadClient(); if (!c || !_user) return;
+    // 1) 先记录墓碑（让其他端在「行已删、墓碑未写」的窗口里也能看到要删）
+    await Sync.markDeleted(materialId);
+    // 2) 再真正删除云端数据 + 音频
     await c.from("materials").delete().eq("id", materialId).eq("user_id", _uid());
     await c.from("vocab").delete().eq("material_id", materialId).eq("user_id", _uid());
     await c.from("progress").delete().eq("material_id", materialId).eq("user_id", _uid());
     if (audioPath) {
-      try { /* 音频可能已被删除，忽略错误 */ } catch (e) {}
       try { await c.storage.from("audio").remove([audioPath]); } catch (e) {}
     }
-    // 记录到云端「已删除列表」，让其他设备同步时也能真正删掉本地副本
-    await Sync.markDeleted(materialId);
     Sync.clearFetchCache(); // 删除后清缓存，确保下次拉到最新
   },
 
   // 把某 materialId 写入云端的「已删除列表」（user_settings.deleted_ids）
   // 其他设备 fetchAll 会拿到这个列表，从而在本地也删掉该材料
+  // 带重试：墓碑必须可靠写入，否则删除无法跨端传播（删了又被复活）
   async markDeleted(materialId) {
     const c = await _loadClient(); if (!c || !_user || !materialId) return;
     const uid = _uid();
-    try {
-      const { data: cur } = await c.from("user_settings").select("deleted_ids").eq("user_id", uid).maybeSingle();
-      let arr = (cur && Array.isArray(cur.deleted_ids)) ? cur.deleted_ids.slice() : [];
-      if (arr.indexOf(materialId) === -1) arr.push(materialId);
-      await c.from("user_settings").upsert({ user_id: uid, deleted_ids: arr });
-      console.log("[Sync] markDeleted 已记录到云端:", materialId);
-    } catch (e) { console.warn("[Sync] markDeleted 失败（不影响本地删除）", e); }
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const { data: cur } = await c.from("user_settings").select("deleted_ids").eq("user_id", uid).maybeSingle();
+        let arr = (cur && Array.isArray(cur.deleted_ids)) ? cur.deleted_ids.slice() : [];
+        if (arr.indexOf(materialId) === -1) arr.push(materialId);
+        await c.from("user_settings").upsert({ user_id: uid, deleted_ids: arr });
+        console.log("[Sync] markDeleted 已记录到云端:", materialId, "(attempt " + (attempt + 1) + ")");
+        return;
+      } catch (e) { lastErr = e; console.warn("[Sync] markDeleted 第" + (attempt + 1) + "次失败", e); }
+    }
+    console.warn("[Sync] markDeleted 最终失败（不影响本地删除）", lastErr);
   },
 
   // 清空云端的「已删除列表」（nukeAll 用）
@@ -332,8 +339,9 @@ const Sync = {
       try { window.renderCloudList(data.materials); } catch (e) { console.warn("[Sync] renderCloudList 失败", e); }
     }
     const cloudIds = new Set((data.materials || []).map(function (m) { return m.id; }));
-    console.log("[Sync] pullFromCloud cloudIds:", Array.from(cloudIds));
-    await Sync.pushLocalAll(cloudIds);
+    const deletedIds = new Set((data.deletedIds || []).filter(Boolean));
+    console.log("[Sync] pullFromCloud cloudIds:", Array.from(cloudIds), "deletedIds:", Array.from(deletedIds));
+    await Sync.pushLocalAll(cloudIds, deletedIds);
     return data;
     } finally { _syncLock = false; }
   },
@@ -436,6 +444,7 @@ const Sync = {
     try {
       localStorage.removeItem("shadowing:last_material");
       localStorage.removeItem("shadowing:deleted_ids");
+      localStorage.removeItem("shadowing:synced_ids");
     } catch (_) {}
     try { await Sync.clearDeletedList(); } catch (_) {}
     results.ok = true;
@@ -457,6 +466,7 @@ Sync.applyCloudDataToLocal = async function (data) {
   var mergedDeleted = deletedArr.concat(cloudDeleted.filter(function (id) { return deletedArr.indexOf(id) === -1; }));
   try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify(mergedDeleted)); } catch (_) {}
   var deletedIds = new Set(mergedDeleted);
+  var synced = _loadSyncedIds();
 
   // 🔑 关键：真正删除本地 IndexedDB 中「已被任一端删除」的材料（同步删除落到本机）
   for (const id of deletedIds) {
@@ -464,6 +474,7 @@ Sync.applyCloudDataToLocal = async function (data) {
       const ex = await window._idbGet(id);
       if (ex) {
         await window._idbDelete(id);
+        synced.delete(id);
         console.log("[Sync] applyCloudDataToLocal 已删除本地副本（同步删除）:", id);
       }
     } catch (_) {}
@@ -486,6 +497,7 @@ Sync.applyCloudDataToLocal = async function (data) {
     try {
       console.log("[Sync] applyCloudDataToLocal 写入:", m.id, "audioPath:", m.audioPath || "(无)", "本地blob:", !!blob);
       await window._idbPut(m.id, mat, blob);
+      synced.add(m.id);
       console.log("[Sync] applyCloudDataToLocal 写入成功:", m.id);
     }
     catch (e) { console.warn("[Sync] put material failed", m.id, e); }
@@ -528,10 +540,23 @@ Sync.applyCloudDataToLocal = async function (data) {
   if (data.lastMaterialId) {
     try { localStorage.setItem("shadowing:lastMaterialId", data.lastMaterialId); } catch (e) {}
   }
+  _saveSyncedIds(synced);
 };
 
+// === 本地「已同步到云端」材料 ID 集合（用于识别「被其他端删除」的材料，防止复活）===
+// 说明：一个材料只要曾成功上传过/下载过，就记入 synced_ids。
+// 若某次拉取发现它「云端已无、但本地曾经同步过」，即可判定被其他端删除 → 删本地、不回传。
+// 用 deletedIds 非空作为安全护栏：避免云端偶发返回空列表时误删本地全部材料。
+function _loadSyncedIds() {
+  try { var a = JSON.parse(localStorage.getItem("shadowing:synced_ids") || "[]"); return Array.isArray(a) ? new Set(a) : new Set(); } catch (_) { return new Set(); }
+}
+function _saveSyncedIds(set) {
+  try { localStorage.setItem("shadowing:synced_ids", JSON.stringify(Array.from(set))); } catch (_) {}
+}
+
 // 把本地 IndexedDB 中所有材料推到云端（登录/同步时调用，防止本地独有数据永久留在一台设备）
-Sync.pushLocalAll = async function (existingIds) {
+// ⚠️ 关键修复：deletedIds 里的材料【只删本地、绝不回传】，彻底杜绝「删了又被复活」
+Sync.pushLocalAll = async function (existingIds, deletedIds) {
   if (!Sync.isAuthed()) return;
   let rows = [];
   try { rows = (await window._idbGetAll()) || []; } catch (e) {
@@ -542,11 +567,24 @@ Sync.pushLocalAll = async function (existingIds) {
   console.log("[Sync] pushLocalAll 本地材料数:", rows.length, "→ IDs:", rows.map(function(r){return r.id;}));
   if (!rows.length) { console.log("[Sync] pushLocalAll 本地无材料，跳过"); return; }
   const skip = existingIds instanceof Set ? existingIds : null;
-  let uploaded = 0, failed = 0;
+  // 已删除集合：云端 deleted_ids + 本地标记（兜底双保险）
+  const del = deletedIds instanceof Set ? new Set(deletedIds) : new Set();
+  try { (JSON.parse(localStorage.getItem("shadowing:deleted_ids") || "[]") || []).forEach(function (id) { if (id) del.add(id); }); } catch (_) {}
+  // 曾经成功同步到云端的本地材料 ID
+  const synced = _loadSyncedIds();
+  const deletedSignal = del.size > 0; // 安全护栏：仅当本轮回传确实含删除信号时才允许「缺失即删除」
+  let uploaded = 0, failed = 0, removed = 0;
   for (const r of rows) {
     try {
       const id = r.id;
       if (!id) continue;
+      // 🔑 关键修复：任何一端删过的材料 → 直接删本地副本，绝不回传（防止删了又被复活）
+      if (del.has(id)) {
+        try { await window._idbDelete(id); removed++; } catch (_) {}
+        synced.delete(id);
+        console.log("[Sync] pushLocalAll 命中已删除列表，删本地不回传:", id);
+        continue;
+      }
       const material = r.material || {};
       const blob = r.audioBlob || null;
       // 性能优化：云端已有音频则跳过音频重传（避免每次刷新/切标签都重传数 MB 音频）。
@@ -554,10 +592,26 @@ Sync.pushLocalAll = async function (existingIds) {
       var audioSynced = false;
       try { audioSynced = localStorage.getItem("shadowing:audio_synced:" + id) === "1"; } catch (_) {}
       const uploadBlob = !!blob && !audioSynced;
-      if (skip && skip.has(id) && !uploadBlob) {
-        console.log("[Sync] pushLocalAll 跳过（云端已有且本地无新音频）:", id);
+      // 云端已有该材料 → 跳过上传（但仍标记为已同步）
+      if (skip && skip.has(id)) {
+        synced.add(id);
+        console.log("[Sync] pushLocalAll 跳过（云端已有）:", id);
         continue;
       }
+      // ⚠️ 曾经同步过、但云端现在查不到 → 说明被其他端删除 → 删本地、不回传（核心防复活逻辑）
+      if (synced.has(id)) {
+        if (deletedSignal) {
+          try { await window._idbDelete(id); removed++; } catch (_) {}
+          synced.delete(id);
+          console.log("[Sync] pushLocalAll 云端已无此材料（曾被同步），视为已删除，删本地不回传:", id);
+          continue;
+        } else {
+          // 无删除信号时保守处理：保留本地、不回传也不删，等下次有明确信号再判定
+          console.log("[Sync] pushLocalAll 云端缺失但无删除信号，保守保留本地:", id);
+          continue;
+        }
+      }
+      // 其余：本地新建、尚未上传 → 正常上传
       console.log("[Sync] pushLocalAll 推送:", id, "有音频:", !!uploadBlob);
       var result = await Sync.upsertMaterial({
         id: id,
@@ -572,6 +626,7 @@ Sync.pushLocalAll = async function (existingIds) {
         try { localStorage.setItem("shadowing:audio_synced:" + id, "1"); } catch (_) {}
       }
       uploaded++;
+      synced.add(id);
       try {
         const vb = JSON.parse(localStorage.getItem("shadowing:vocab:" + id) || "[]");
         if (vb && vb.length) await Sync.upsertVocab(id, vb);
@@ -587,7 +642,8 @@ Sync.pushLocalAll = async function (existingIds) {
       if (window.toast) window.toast("❌ 上传失败: " + (e && e.message || String(e)));
     }
   }
-  console.log("[Sync] pushLocalAll 完成: 成功 " + uploaded + ", 失败 " + failed);
+  _saveSyncedIds(synced);
+  console.log("[Sync] pushLocalAll 完成: 成功 " + uploaded + ", 失败 " + failed + ", 删本地(已删材料) " + removed);
   if (window.toast && uploaded > 0) window.toast("✅ 已上传 " + uploaded + " 个材料到云端" + (failed ? " (" + failed + " 个失败)" : ""));
 };
 
