@@ -477,7 +477,13 @@ window.onSyncSignedIn = function () { doPull(); };
 function doPull() {
   Sync.pullFromCloud().then(function (data) {
     if (!data) return;
-    toast("已同步 " + (data.materials || []).length + " 个材料");
+    var stats = data._syncStats || {};
+    var count = stats.kept != null ? stats.kept : (data.materials || []).length;
+    if (stats.removed > 0) {
+      toast("已同步 " + count + " 个材料（过滤 " + stats.removed + " 个已删除）");
+    } else {
+      toast("已同步 " + count + " 个材料");
+    }
     renderList();
   }).catch(function (err) { console.warn("[sync pull]", err); });
 }

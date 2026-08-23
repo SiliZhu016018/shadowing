@@ -742,8 +742,14 @@ window.addEventListener("DOMContentLoaded", function () {
 window.onSyncSignedIn = function () { doPull(); };
 function doPull() {
   Sync.pullFromCloud().then(function (data) {
-    if (data && (data.materials || []).length) {
-      toast("已同步 " + (data.materials || []).length + " 个材料的生词");
+    if (data) {
+      var stats = data._syncStats || {};
+      var count = stats.kept != null ? stats.kept : (data.materials || []).length;
+      if (count > 0) {
+        var msg = "已同步 " + count + " 个材料的生词";
+        if (stats.removed > 0) msg += "（过滤 " + stats.removed + " 个已删除）";
+        toast(msg);
+      }
     }
     loadAllEntries().then(function () {
       // 兜底：IndexedDB 为空时（手机 Safari 私有模式），直接从云端数据渲染生词

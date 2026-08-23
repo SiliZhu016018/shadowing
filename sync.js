@@ -242,6 +242,26 @@ const Sync = {
     try { await c.from("user_settings").upsert({ user_id: _uid(), deleted_ids: [] }); } catch (e) {}
   },
 
+  // 🧹 云端幽灵清理：把「已删除列表」里仍躺在云端 materials 表的材料彻底删掉
+  // 这样被删除的材料不会每次同步都"过滤 1 个已删除"，幽灵最终自然消失
+  async cleanupCloudDeleted(deletedIds) {
+    if (!deletedIds || !deletedIds.length) return;
+    const c = await _loadClient(); if (!c || !_user) return;
+    const uid = _uid();
+    for (const id of deletedIds) {
+      try {
+        // 先确认云端还有这行（避免无谓删除 + 顺带清 vocab/progress/音频）
+        const { data: row } = await c.from("materials").select("audio_path").eq("id", id).eq("user_id", uid).maybeSingle();
+        if (!row) { console.log("[Sync] cleanupCloudDeleted 云端已无:", id); continue; }
+        await c.from("materials").delete().eq("id", id).eq("user_id", uid);
+        await c.from("vocab").delete().eq("material_id", id).eq("user_id", uid);
+        await c.from("progress").delete().eq("material_id", id).eq("user_id", uid);
+        if (row.audio_path) { try { await c.storage.from("audio").remove([row.audio_path]); } catch (_) {} }
+        console.log("[Sync] cleanupCloudDeleted 已清云端幽灵:", id);
+      } catch (e) { console.warn("[Sync] cleanupCloudDeleted 失败:", id, e); }
+    }
+  },
+
   // 覆盖式上传某材料的生词（先删旧的再插新的，简单可靠）
   async upsertVocab(materialId, vocabArray) {
     const c = await _loadClient(); if (!c || !_user) throw new Error("未登录");
@@ -344,6 +364,8 @@ const Sync = {
     const deletedIds = new Set((data.deletedIds || []).filter(Boolean));
     console.log("[Sync] pullFromCloud cloudIds:", Array.from(cloudIds), "deletedIds:", Array.from(deletedIds));
     await Sync.pushLocalAll(cloudIds, deletedIds);
+    // 🧹 清掉云端还躺着的"已删除材料"幽灵（删除后不再每次同步都"过滤 N 个"）
+    if (deletedIds.size) { Sync.cleanupCloudDeleted(Array.from(deletedIds)).catch(function (e) { console.warn("[Sync] cleanupCloudDeleted 异常", e); }); }
     return data;
     } finally { _syncLock = false; }
   },
