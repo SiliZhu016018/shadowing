@@ -167,7 +167,10 @@
   </nav>
 
   <header class="page-hd">
-    <h1>📚 材料库</h1>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <h1 style="margin:0;">📚 材料库</h1>
+      <button id="nuke-all-btn" style="font-size:11px;padding:3px 10px;border:1px solid var(--rec);color:var(--rec);border-radius:8px;background:transparent;cursor:pointer;white-space:nowrap;" title="删除云端+本地所有材料数据">🧹 清除全部</button>
+    </div>
     <p class="sub">所有生成过的听力材料 · 跨材料整合统计学习进度与生词</p>
   </header>
 
@@ -368,6 +371,7 @@ function renderList() {
   const wrap = document.getElementById("list-wrap");
   idbGetAll().then(function (rows) {
     rows.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    window._libRawRows = rows; // 保存原始行数据，删除时需要取 audioPath
     updateStats(rows);
     if (!rows.length) {
       wrap.innerHTML = '<div class="empty"><div class="empty-emoji">📭</div>还没有保存的材料<br><small>先去「生成材料」页面拖入 MP3 音频开始第一份</small></div>';
@@ -394,12 +398,57 @@ function bindRowActions() {
       e.stopPropagation();
       const id = btn.dataset.del;
       if (!confirm("确定删除这个材料？\n\n（生词本会保留，但来源链接会失效）")) return;
+      // 同时删云端（如果已登录同步）
+      if (window.Sync && Sync.isAuthed()) {
+        var rows = window._libRawRows || [];
+        var target = null;
+        for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === id) { target = rows[i]; break; } }
+        var ap = (target && target.material && target.material.meta && target.material.meta.audioPath) || null;
+        Sync.deleteMaterial(id, ap).catch(function(err){ console.warn("[lib] 云端删除失败:", err); });
+        // 记录已删 ID
+        window._deletedMaterialIds = window._deletedMaterialIds || new Set();
+        window._deletedMaterialIds.add(id);
+        try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify([...window._deletedMaterialIds])); } catch(_) {}
+      }
       idbDelete(id).then(function () {
         toast("已删除");
         renderList();
       }).catch(function () { toast("删除失败"); });
     });
   });
+
+  // 🧹 清除全部按钮：一键删除云端+本地所有材料
+  var nukeBtn = document.getElementById("nuke-all-btn");
+  if (nukeBtn) {
+    nukeBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (!window.Sync || !Sync.isAuthed()) { toast("请先登录同步账号"); return; }
+      if (!confirm("⚠️ 确定要删除云端和本地的全部材料数据吗？\n\n此操作不可撤销！")) return;
+      nukeBtn.disabled = true; nukeBtn.textContent = "删除中…";
+      Sync.fetchAll().then(function(data) {
+        var mats = (data && data.materials) || [];
+        var promises = [];
+        mats.forEach(function(m) {
+          promises.push(Sync.deleteMaterial(m.id, m.audioPath||null).catch(function(e){console.warn("删云端失败:",m.id,e)}));
+          promises.push(idbDelete(m.id).catch(function(){}));
+        });
+        return Promise.all(promises);
+      }).then(function() {
+        try { localStorage.removeItem("shadowing:last_material"); localStorage.removeItem("shadowing:deleted_ids"); } catch(_) {}
+        return Sync.fetchAll();
+      }).then(function(d2) {
+        var remaining = (d2 && d2.materials) || [];
+        if (remaining.length === 0) {
+          toast("✅ 云端+本地已全部清除！");
+          renderList();
+        } else {
+          toast("⚠️ 云端仍有 " + remaining.length + " 个（可能 RLS 策略阻止）");
+          console.warn("[nuke] 剩余:", remaining);
+        }
+      }).catch(function(err) { toast("出错: " + (err.message||err)); console.error(err); })
+      .finally(function() { nukeBtn.disabled = false; nukeBtn.textContent = "🧹 清除全部"; });
+    });
+  }
   // 整行点击也能打开
   document.querySelectorAll(".lib-card").forEach(function (card) {
     card.addEventListener("click", function () {
