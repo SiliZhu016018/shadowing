@@ -1,5 +1,5 @@
-/* Shadowing English Service Worker — 离线缓存 */
-const CACHE = "shadowing-v3";
+/* Shadowing English Service Worker — 离线缓存 + 导航加速 */
+const CACHE = "shadowing-v4";
 const CORE = [
   "./",
   "./index.html",
@@ -9,12 +9,24 @@ const CORE = [
   "./icon-192.png",
   "./icon-512.png",
   "./icon-maskable-512.png",
+  // Supabase SDK（CDN）：安装时预缓存，后续页面切换不再走网络
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
 ];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(
     caches.open(CACHE)
-      .then(function (c) { return c.addAll(CORE); })
+      .then(function (c) {
+        // 先缓存核心同源资源（必须成功）
+        const local = CORE.filter(function (u) { return u.indexOf("http") !== 0; });
+        const cdn = CORE.filter(function (u) { return u.indexOf("http") === 0; });
+        return c.addAll(local).then(function () {
+          // CDN（Supabase SDK）尽力而为：失败不影响安装
+          return Promise.allSettled(cdn.map(function (u) {
+            return fetch(u).then(function (r) { return c.put(u, r.clone()); });
+          }));
+        });
+      })
       .then(function () { return self.skipWaiting(); })
   );
 });
@@ -37,13 +49,16 @@ self.addEventListener("fetch", function (e) {
   const url = new URL(req.url);
 
   if (url.origin === self.location.origin) {
-    // 同源：网络优先（保证更新），离线回退缓存
+    // 同源：缓存优先（stale-while-revalidate）—— 导航秒开，后台静默更新缓存
+    // 先立即返回缓存（若有），同时后台 fetch 刷新缓存，保证内容不过期
     e.respondWith(
-      fetch(req).then(function (res) {
-        try { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req.url, copy); }); } catch (_) {}
-        return res;
-      }).catch(function () {
-        return caches.match(req).then(function (m) { return m || caches.match("./index.html"); });
+      caches.match(req).then(function (cached) {
+        const network = fetch(req).then(function (res) {
+          try { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req.url, copy); }); } catch (_) {}
+          return res;
+        }).catch(function () { return cached; });
+        // 有缓存立即返回（手机端导航不再卡网络）；无缓存等网络
+        return cached || network;
       })
     );
     return;
