@@ -118,6 +118,7 @@ const Sync = {
       vocab: vocab,
       progress: progress,
       lastMaterialId: s.data ? s.data.last_material_id : null,
+      deletedIds: (s.data && Array.isArray(s.data.deleted_ids)) ? s.data.deleted_ids : [],
     };
   },
 
@@ -187,8 +188,31 @@ const Sync = {
     await c.from("vocab").delete().eq("material_id", materialId).eq("user_id", _uid());
     await c.from("progress").delete().eq("material_id", materialId).eq("user_id", _uid());
     if (audioPath) {
+      try { /* 音频可能已被删除，忽略错误 */ } catch (e) {}
       try { await c.storage.from("audio").remove([audioPath]); } catch (e) {}
     }
+    // 记录到云端「已删除列表」，让其他设备同步时也能真正删掉本地副本
+    await Sync.markDeleted(materialId);
+  },
+
+  // 把某 materialId 写入云端的「已删除列表」（user_settings.deleted_ids）
+  // 其他设备 fetchAll 会拿到这个列表，从而在本地也删掉该材料
+  async markDeleted(materialId) {
+    const c = await _loadClient(); if (!c || !_user || !materialId) return;
+    const uid = _uid();
+    try {
+      const { data: cur } = await c.from("user_settings").select("deleted_ids").eq("user_id", uid).maybeSingle();
+      let arr = (cur && Array.isArray(cur.deleted_ids)) ? cur.deleted_ids.slice() : [];
+      if (arr.indexOf(materialId) === -1) arr.push(materialId);
+      await c.from("user_settings").upsert({ user_id: uid, deleted_ids: arr });
+      console.log("[Sync] markDeleted 已记录到云端:", materialId);
+    } catch (e) { console.warn("[Sync] markDeleted 失败（不影响本地删除）", e); }
+  },
+
+  // 清空云端的「已删除列表」（nukeAll 用）
+  async clearDeletedList() {
+    const c = await _loadClient(); if (!c || !_user) return;
+    try { await c.from("user_settings").upsert({ user_id: _uid(), deleted_ids: [] }); } catch (e) {}
   },
 
   // 覆盖式上传某材料的生词（先删旧的再插新的，简单可靠）
@@ -383,11 +407,12 @@ const Sync = {
         }
       }
     } catch (e) { results.errors.push("本地删除异常: " + e.message); }
-    // 3. 清理 localStorage 标记
+    // 3. 清理 localStorage 标记 + 云端已删列表
     try {
       localStorage.removeItem("shadowing:last_material");
       localStorage.removeItem("shadowing:deleted_ids");
     } catch (_) {}
+    try { await Sync.clearDeletedList(); } catch (_) {}
     results.ok = true;
     results.msg = "云端删 " + results.deletedCloud + " 条，本地删 " + results.deletedLocal + " 个";
     if (results.errors.length) results.msg += "，错误: " + results.errors.join("; ");
@@ -398,9 +423,27 @@ const Sync = {
 // 把云端 fetchAll 返回的数据写入本地
 Sync.applyCloudDataToLocal = async function (data) {
   if (!data) return;
-  // 跳过用户主动删除的材料 ID（防止云端残留数据又拉回本地）
-  var deletedIds = new Set();
-  try { deletedIds = new Set(JSON.parse(localStorage.getItem("shadowing:deleted_ids") || "[]")); } catch (_) {}
+  // 合并「云端已删除列表」+「本地已删标记」，任何一端删过的材料，所有端都该消失
+  var deletedArr = [];
+  try { deletedArr = JSON.parse(localStorage.getItem("shadowing:deleted_ids") || "[]"); } catch (_) {}
+  if (!Array.isArray(deletedArr)) deletedArr = [];
+  // 云端同步下来的已删除列表（其他设备删的）
+  var cloudDeleted = (data.deletedIds && Array.isArray(data.deletedIds)) ? data.deletedIds : [];
+  var mergedDeleted = deletedArr.concat(cloudDeleted.filter(function (id) { return deletedArr.indexOf(id) === -1; }));
+  try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify(mergedDeleted)); } catch (_) {}
+  var deletedIds = new Set(mergedDeleted);
+
+  // 🔑 关键：真正删除本地 IndexedDB 中「已被任一端删除」的材料（同步删除落到本机）
+  for (const id of deletedIds) {
+    try {
+      const ex = await window._idbGet(id);
+      if (ex) {
+        await window._idbDelete(id);
+        console.log("[Sync] applyCloudDataToLocal 已删除本地副本（同步删除）:", id);
+      }
+    } catch (_) {}
+  }
+
   // 合并模式：只把云端有的材料写回本地（按 id 覆盖），绝不删除本地独有材料 —— 防止「云端空 → 清空本地」的数据丢失
   // 云端音频路径带进 meta，播放时直接用签名 URL（无需下载 blob，跨设备更稳）；同时把 blob 也存一份作为离线兜底
   for (const m of (data.materials || [])) {
