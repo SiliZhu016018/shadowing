@@ -12,6 +12,12 @@ let _sb = null;        // supabase 客户端实例
 let _user = null;      // 当前登录用户 {id, email}
 let _authCbs = [];     // 登录状态变化回调
 
+// === 性能优化：全局同步锁 + 结果缓存 ===
+var _syncLock = false;           // 同步进行中标记（防止并发重复调用）
+var _lastFetchResult = null;     // 上次 fetchAll 结果缓存
+var _lastFetchTime = 0;          // 上次 fetchAll 时间戳
+var FETCH_CACHE_TTL = 15000;     // 缓存有效期 15 秒（同一页面内不重复请求）
+
 // 动态加载 supabase-js（ESM）
 async function _loadClient() {
   if (_sb) return _sb;
@@ -47,6 +53,8 @@ const Sync = {
   getUser() { return _user; },
   // 注册登录状态变化回调
   onAuthChange(cb) { _authCbs.push(cb); if (_user) cb(_user); },
+  // 清除 fetchAll 缓存（上传/删除/编辑后调用，确保下次拉取最新数据）
+  clearFetchCache() { _lastFetchResult = null; _lastFetchTime = 0; },
 
   // 邮箱密码注册
   async signUp(email, password) {
@@ -73,8 +81,14 @@ const Sync = {
   },
 
   // 拉取云端全部数据（启动时同步用）
-  // 返回 { materials: [...], vocab: {materialId: [...]}, progress: {materialId: {...}}, lastMaterialId }
-  async fetchAll() {
+  // 返回 { materials: [...], vocab: {materialId: [...]}, progress: {materialId: {...}}, lastMaterialId, deletedIds }
+  // ⚡ 15 秒内重复调用直接返回缓存结果（避免页面加载时多触发点导致 2-3 轮全量请求）
+  async fetchAll(force) {
+    // 缓存命中：15 秒内不重复请求
+    if (!force && _lastFetchResult && (Date.now() - _lastFetchTime) < FETCH_CACHE_TTL) {
+      console.log("[Sync] fetchAll 命中缓存（", Math.round((Date.now() - _lastFetchTime) / 1000), "秒内）");
+      return _lastFetchResult;
+    }
     const c = await _loadClient(); if (!c || !_user) return null;
     const uid = _uid();
     const [m, v, p, s] = await Promise.all([
@@ -113,13 +127,17 @@ const Sync = {
         updatedAt: r.updated_at,
       };
     });
-    return {
+    var result = {
       materials: materials,
       vocab: vocab,
       progress: progress,
       lastMaterialId: s.data ? s.data.last_material_id : null,
       deletedIds: (s.data && Array.isArray(s.data.deleted_ids)) ? s.data.deleted_ids : [],
     };
+    // 写入缓存
+    _lastFetchResult = result;
+    _lastFetchTime = Date.now();
+    return result;
   },
 
   // 下载某材料的音频 blob（按 audioPath）
@@ -178,6 +196,7 @@ const Sync = {
     const { error } = await c.from("materials").upsert(row);
     if (error) throw error;
     console.log("[Sync] upsertMaterial", material.id, "audio_path:", audioPath || "(保持不变)");
+    Sync.clearFetchCache(); // 上传后清缓存
     return row;
   },
 
@@ -193,6 +212,7 @@ const Sync = {
     }
     // 记录到云端「已删除列表」，让其他设备同步时也能真正删掉本地副本
     await Sync.markDeleted(materialId);
+    Sync.clearFetchCache(); // 删除后清缓存，确保下次拉到最新
   },
 
   // 把某 materialId 写入云端的「已删除列表」（user_settings.deleted_ids）
@@ -295,8 +315,12 @@ const Sync = {
   // === 便捷方法：让三个页面不写重复逻辑 ===
 
   // 拉云端全量并写入本地 IndexedDB + localStorage（覆盖式）
+  // ⚡ 防并发：如果已经在同步中，直接返回（避免启动时多触发点导致 2-3 轮全量同步）
   async pullFromCloud() {
     if (!Sync.isAuthed()) return null;
+    if (_syncLock) { console.log("[Sync] pullFromCloud 跳过（同步进行中）"); return null; }
+    _syncLock = true;
+    try {
     // 双向合并：先拉云端 → 合并进本地（不清本地）→ 再把云端没有的本地材料推上去
     // 这样本地独有数据不会丢、云端独有数据也能下到本地，且不会用旧版本覆盖新版本
     const data = await Sync.fetchAll();
@@ -311,6 +335,7 @@ const Sync = {
     console.log("[Sync] pullFromCloud cloudIds:", Array.from(cloudIds));
     await Sync.pushLocalAll(cloudIds);
     return data;
+    } finally { _syncLock = false; }
   },
 
   // 上传一个材料（含音频 blob）到云端
@@ -812,18 +837,20 @@ window.Sync = Sync;
     wrap.innerHTML = '<div style="background:#fff;border:1px dashed rgba(15,23,42,.12);border-radius:18px;padding:40px 16px;text-align:center;color:#64748b"><div style="font-size:36px;margin-bottom:8px">🔒</div>请先登录以同步材料<br><small>点击右上角「登录同步」按钮</small></div>';
   }
 
-  // 监听登录事件
-  window.onSyncSignedIn = function () {
-    console.log("[sync-safari-fallback] 检测到登录，拉取云端数据");
-    Sync.fetchAll().then(function (data) {
-      if (data && data.materials && data.materials.length) {
-        window.renderCloudList(data.materials);
-        toast("✅ 已同步 " + data.materials.length + " 个材料");
-      }
-    }).catch(function (err) {
-      console.warn("[sync-safari-fallback] 登录后拉取失败", err);
-    });
-  };
+  // 监听登录事件（仅在各页面未设置 onSyncSignedIn 时才兜底，避免覆盖页面自己的登录逻辑）
+  if (!window.onSyncSignedIn) {
+    window.onSyncSignedIn = function () {
+      console.log("[sync-safari-fallback] 检测到登录，拉取云端数据");
+      Sync.fetchAll().then(function (data) {
+        if (data && data.materials && data.materials.length) {
+          window.renderCloudList(data.materials);
+          toast("✅ 已同步 " + data.materials.length + " 个材料");
+        }
+      }).catch(function (err) {
+        console.warn("[sync-safari-fallback] 登录后拉取失败", err);
+      });
+    };
+  }
 
   // 全局快捷：控制台输入 __nuke__() 即可一键清空云端+本地所有材料
   window.__nuke = function () { return Sync.nukeAll(); };

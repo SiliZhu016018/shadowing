@@ -3064,7 +3064,8 @@ var _lastFocusPull = 0;
 function syncPullCurrentMaterial() {
   if (!window.Sync || !Sync.isAuthed() || !state.materialId) return Promise.resolve(false);
   if (audio && !audio.paused) return Promise.resolve(false); // 播放中不打断
-  return Sync.fetchAll().then(function (data) {
+  // ⚡ 切回页面时强制拉最新（不走缓存），确保跨设备编辑能即时同步
+  return Sync.fetchAll(true).then(function (data) {
     if (!data || !data.materials) return false;
     var m = data.materials.find(function (x) { return x.id === state.materialId; });
     if (!m) return false;
