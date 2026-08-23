@@ -71,7 +71,14 @@ self.addEventListener("fetch", function (e) {
     return;
   }
 
-  // CDN（transformers.js 模块等）：缓存优先，首次联网后即可离线复用
+  // 🔑 排除 API / 动态请求：绝对不能缓存！（否则空列表/旧数据会被永久缓存）
+  // Supabase REST API、Storage 签名 URL、以及其他需要实时数据的请求必须直接走网络
+  const isApiCall = url.pathname.indexOf("/rest/v1/") !== -1
+    || url.pathname.indexOf("/storage/v1/") !== -1
+    || url.pathname.indexOf("/auth/v1/") !== -1;
+  if (isApiCall) return;
+
+  // 静态 CDN 资源（JS 模块、字体等）：缓存优先，首次联网后离线复用
   e.respondWith(
     caches.match(req).then(function (m) {
       if (m) return m;
