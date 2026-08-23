@@ -49,7 +49,14 @@ self.addEventListener("fetch", function (e) {
   const url = new URL(req.url);
 
   if (url.origin === self.location.origin) {
-    // 同源：缓存优先（stale-while-revalidate）—— 导航秒开，后台静默更新缓存
+    // 🔑 Safari 兼容：导航请求（HTML 页面加载）不拦截
+    // Cloudflare Pages 导航可能产生重定向（HTTPS升级/路径规范化等），
+    // Safari 对「SW 拦截的导航响应含重定向」会报错：
+    //   "Response served by service worker has redirects"
+    // 所以导航请求直接走网络，只缓存子资源（JS/CSS/图片/字体）
+    if (req.mode === "navigate") return;
+
+    // 同源子资源：缓存优先（stale-while-revalidate）—— 秒开 + 后台静默更新
     // 先立即返回缓存（若有），同时后台 fetch 刷新缓存，保证内容不过期
     e.respondWith(
       caches.match(req).then(function (cached) {

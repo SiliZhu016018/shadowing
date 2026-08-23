@@ -332,7 +332,9 @@ const Sync = {
     // 这样本地独有数据不会丢、云端独有数据也能下到本地，且不会用旧版本覆盖新版本
     const data = await Sync.fetchAll();
     if (!data) return null;
-    await Sync.applyCloudDataToLocal(data);
+    const stats = await Sync.applyCloudDataToLocal(data);
+    // 把过滤后统计挂到返回值上，供 toast 展示「实际留下几个」而非「API 返回几个」
+    data._syncStats = stats;
     // 云端渲染兜底：即使 IndexedDB 写入失败（如 Safari 私有模式），列表也能从云端显示
     // 仅在材料库页（library.html）执行，避免污染 vocab.html 的 #list-wrap
     if (typeof window.renderCloudList === "function" && data.materials && data.materials.length && !document.getElementById("stat-total")) {
@@ -468,6 +470,7 @@ Sync.applyCloudDataToLocal = async function (data) {
   var deletedIds = new Set(mergedDeleted);
   var synced = _loadSyncedIds();
 
+  var kept = 0, removed = 0;
   // 🔑 关键：真正删除本地 IndexedDB 中「已被任一端删除」的材料（同步删除落到本机）
   for (const id of deletedIds) {
     try {
@@ -475,6 +478,7 @@ Sync.applyCloudDataToLocal = async function (data) {
       if (ex) {
         await window._idbDelete(id);
         synced.delete(id);
+        removed++;
         console.log("[Sync] applyCloudDataToLocal 已删除本地副本（同步删除）:", id);
       }
     } catch (_) {}
@@ -498,6 +502,7 @@ Sync.applyCloudDataToLocal = async function (data) {
       console.log("[Sync] applyCloudDataToLocal 写入:", m.id, "audioPath:", m.audioPath || "(无)", "本地blob:", !!blob);
       await window._idbPut(m.id, mat, blob);
       synced.add(m.id);
+      kept++;
       console.log("[Sync] applyCloudDataToLocal 写入成功:", m.id);
     }
     catch (e) { console.warn("[Sync] put material failed", m.id, e); }
@@ -541,6 +546,7 @@ Sync.applyCloudDataToLocal = async function (data) {
     try { localStorage.setItem("shadowing:lastMaterialId", data.lastMaterialId); } catch (e) {}
   }
   _saveSyncedIds(synced);
+  return { kept: kept, removed: removed, totalFetched: (data.materials || []).length };
 };
 
 // === 本地「已同步到云端」材料 ID 集合（用于识别「被其他端删除」的材料，防止复活）===
@@ -765,8 +771,12 @@ Sync.mountAccountButton = function () {
             ? window.syncPullAll()
             : Sync.pullFromCloud().then(function (d) {
                 if (d && d.materials) {
-                  if (typeof window.toast === "function") window.toast("✅ 已同步 " + d.materials.length + " 个材料");
-                  else alert("已同步 " + d.materials.length + " 个材料");
+                  var s = d._syncStats || {};
+                  var n = s.kept != null ? s.kept : d.materials.length;
+                  var msg = "✅ 已同步 " + n + " 个材料";
+                  if (s.removed > 0) msg += "（过滤 " + s.removed + " 个已删除）";
+                  if (typeof window.toast === "function") window.toast(msg);
+                  else alert(msg);
                   if (typeof window.loadVocab === "function") window.loadVocab();
                   if (typeof window.renderList === "function") window.renderList();
                 } else {
@@ -879,8 +889,13 @@ window.Sync = Sync;
     console.log("[sync-safari-fallback] 已登录，立即拉取云端数据");
     Sync.fetchAll().then(function (data) {
       if (data && data.materials && data.materials.length) {
-        window.renderCloudList(data.materials);
-        toast("✅ 已同步 " + data.materials.length + " 个材料");
+        // 过滤掉已删除材料后再渲染和提示
+        var delSet = new Set((data.deletedIds || []).filter(Boolean));
+        var visible = data.materials.filter(function (m) { return !delSet.has(m.id); });
+        window.renderCloudList(visible);
+        var msg = "✅ 已同步 " + visible.length + " 个材料";
+        if (data.materials.length - visible.length > 0) msg += "（过滤 " + (data.materials.length - visible.length) + " 个已删除）";
+        toast(msg);
       } else {
         wrap.innerHTML = '<div style="background:#fff;border:1px dashed rgba(15,23,42,.12);border-radius:18px;padding:40px 16px;text-align:center;color:#64748b"><div style="font-size:36px;margin-bottom:8px">📭</div>还没有保存的材料<br><small>先去「生成材料」页面拖入 MP3 音频开始第一份</small></div>';
       }
@@ -899,8 +914,12 @@ window.Sync = Sync;
       console.log("[sync-safari-fallback] 检测到登录，拉取云端数据");
       Sync.fetchAll().then(function (data) {
         if (data && data.materials && data.materials.length) {
-          window.renderCloudList(data.materials);
-          toast("✅ 已同步 " + data.materials.length + " 个材料");
+          var delSet2 = new Set((data.deletedIds || []).filter(Boolean));
+          var vis2 = data.materials.filter(function (m) { return !delSet2.has(m.id); });
+          window.renderCloudList(vis2);
+          var msg2 = "✅ 已同步 " + vis2.length + " 个材料";
+          if (data.materials.length - vis2.length > 0) msg2 += "（过滤 " + (data.materials.length - vis2.length) + " 个已删除）";
+          toast(msg2);
         }
       }).catch(function (err) {
         console.warn("[sync-safari-fallback] 登录后拉取失败", err);

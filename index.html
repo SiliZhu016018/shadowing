@@ -3109,8 +3109,13 @@ window.addEventListener("focus", maybeFocusPull);
 function syncPullAll() {
   return Sync.pullFromCloud().then(function (data) {
     if (!data) return;
-    var count = (data.materials || []).length;
-    toast("已从云端同步 " + count + " 个材料");
+    var stats = data._syncStats || {};
+    var count = stats.kept != null ? stats.kept : (data.materials || []).length;
+    if (stats.removed > 0) {
+      toast("已同步 " + count + " 个材料（过滤 " + stats.removed + " 个已删除）");
+    } else {
+      toast("已从云端同步 " + count + " 个材料");
+    }
     // 刷新：让 loadMaterial 重新走（会用刚拉到的数据）
     var lastId = null;
     try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {}
