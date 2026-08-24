@@ -1157,17 +1157,36 @@
   // 关键修复：iOS Safari 在「设置 currentTime 后立即 play」时会从旧位置开始播，
   // 导致逐句播放越播越偏（刷新后第一句正确、之后漂移）。等 seeked 事件可根除该问题。
   function seekAndPlay(target, onReady) {
+    // ✅ 关键：每次 seek 前先暂停。iOS Safari 在「播放中」seek 落点会漂移且逐句累积，
+    //    这正是「第一句对、顺着点后面越播越偏、刷新又对了」的根因。暂停后再 seek 才精确。
+    audio.pause();
     function begin() {
-      if (Math.abs(audio.currentTime - target) < 0.001) { onReady(); return; }
-      let done = false;
-      function ready() {
-        if (done) return; done = true;
+      let settled = false;
+      function finish() {
+        if (settled) return; settled = true;
+        audio.removeEventListener("seeked", onSeek);
+        // 二次校验：iOS 流媒体偶发落点偏离，超过 0.25s 则补一次 seek 兜底
+        if (Math.abs(audio.currentTime - target) > 0.25) {
+          let settled2 = false;
+          function finish2() {
+            if (settled2) return; settled2 = true;
+            audio.removeEventListener("seeked", onSeek2);
+            state.programmaticSeek = false;
+            onReady();
+          }
+          function onSeek2() { finish2(); }
+          audio.addEventListener("seeked", onSeek2, { once: true });
+          setTimeout(finish2, 300);
+          audio.currentTime = target;
+          return;
+        }
         state.programmaticSeek = false;
         onReady();
       }
+      function onSeek() { finish(); }
+      audio.addEventListener("seeked", onSeek, { once: true });
+      setTimeout(finish, 400); // 兜底：个别格式/浏览器不触发 seeked 时也能继续
       state.programmaticSeek = true;
-      audio.addEventListener("seeked", ready, { once: true });
-      setTimeout(ready, 300); // 兜底：个别格式/浏览器不触发 seeked 时也能继续
       audio.currentTime = target;
     }
     if (audio.readyState >= 1 && isFinite(audio.duration)) begin();
