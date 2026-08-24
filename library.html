@@ -397,23 +397,27 @@ function bindRowActions() {
     btn.addEventListener("click", function (e) {
       e.stopPropagation();
       const id = btn.dataset.del;
-      if (!confirm("确定删除这个材料？\n\n（生词本会保留，但来源链接会失效）")) return;
-      // 同时删云端（如果已登录同步）
-      if (window.Sync && Sync.isAuthed()) {
-        var rows = window._libRawRows || [];
-        var target = null;
-        for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === id) { target = rows[i]; break; } }
-        var ap = (target && target.material && target.material.meta && target.material.meta.audioPath) || null;
-        Sync.deleteMaterial(id, ap).catch(function(err){ console.warn("[lib] 云端删除失败:", err); });
-        // 记录已删 ID
-        window._deletedMaterialIds = window._deletedMaterialIds || new Set();
-        window._deletedMaterialIds.add(id);
-        try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify([...window._deletedMaterialIds])); } catch(_) {}
-      }
-      idbDelete(id).then(function () {
-        toast("已删除");
-        renderList();
-      }).catch(function () { toast("删除失败"); });
+      // 弹二选一：仅删材料（保留生词进度）/ 连同生词本删除 / 取消
+      Sync.confirmDeleteMaterial("从材料库删除").then(function (choice) {
+        if (!choice) { toast("已取消删除"); return; }
+        const deleteVocab = (choice === "delete");
+        // 同时删云端（如果已登录同步）
+        if (window.Sync && Sync.isAuthed()) {
+          var rows = window._libRawRows || [];
+          var target = null;
+          for (var i = 0; i < rows.length; i++) { if (rows[i] && rows[i].id === id) { target = rows[i]; break; } }
+          var ap = (target && target.material && target.material.meta && target.material.meta.audioPath) || null;
+          Sync.deleteMaterial(id, ap, { deleteVocab: deleteVocab }).catch(function(err){ console.warn("[lib] 云端删除失败:", err); });
+          // 记录已删 ID
+          window._deletedMaterialIds = window._deletedMaterialIds || new Set();
+          window._deletedMaterialIds.add(id);
+          try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify([...window._deletedMaterialIds])); } catch(_) {}
+        }
+        idbDelete(id).then(function () {
+          toast(deleteVocab ? "已删除（含生词本）" : "已删除（保留生词与进度）");
+          renderList();
+        }).catch(function () { toast("删除失败"); });
+      });
     });
   });
 
@@ -429,7 +433,7 @@ function bindRowActions() {
         var mats = (data && data.materials) || [];
         var promises = [];
         mats.forEach(function(m) {
-          promises.push(Sync.deleteMaterial(m.id, m.audioPath||null).catch(function(e){console.warn("删云端失败:",m.id,e)}));
+          promises.push(Sync.deleteMaterial(m.id, m.audioPath||null, { deleteVocab: true }).catch(function(e){console.warn("删云端失败:",m.id,e)}));
           promises.push(idbDelete(m.id).catch(function(){}));
         });
         return Promise.all(promises);

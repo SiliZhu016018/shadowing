@@ -202,18 +202,84 @@ const Sync = {
 
   // 删除云端材料（数据 + Storage 音频）
   // ⚠️ 顺序很关键：先写「已删除墓碑」再删云端行，避免竞态导致其他端把本地副本复活
-  async deleteMaterial(materialId, audioPath) {
+  // 删除云端材料（数据 + 音频）。
+  // opts.deleteVocab:
+  //   - false / undefined（默认）→ 仅删材料本身 + 音频，【保留】生词本与学习进度
+  //   - true → 连同生词本(vocab)、播放进度(progress) 一起删除
+  async deleteMaterial(materialId, audioPath, opts) {
     const c = await _loadClient(); if (!c || !_user) return;
+    const deleteVocab = !!(opts && opts.deleteVocab);
     // 1) 先记录墓碑（让其他端在「行已删、墓碑未写」的窗口里也能看到要删）
     await Sync.markDeleted(materialId);
-    // 2) 再真正删除云端数据 + 音频
+    // 2) 再真正删除云端数据 + 音频（材料行总是删）
     await c.from("materials").delete().eq("id", materialId).eq("user_id", _uid());
-    await c.from("vocab").delete().eq("material_id", materialId).eq("user_id", _uid());
-    await c.from("progress").delete().eq("material_id", materialId).eq("user_id", _uid());
+    if (deleteVocab) {
+      // 仅当用户明确「连同生词本删除」时才删生词与进度，
+      // 避免重载材料时丢失已学生词/进度（默认保留，符合「只删材料」的语义）
+      await c.from("vocab").delete().eq("material_id", materialId).eq("user_id", _uid());
+      await c.from("progress").delete().eq("material_id", materialId).eq("user_id", _uid());
+    }
     if (audioPath) {
       try { await c.storage.from("audio").remove([audioPath]); } catch (e) {}
     }
     Sync.clearFetchCache(); // 删除后清缓存，确保下次拉到最新
+  },
+
+  // 删除材料时的「是否连同生词本删除」选择弹窗（library.html / index.html 共用）
+  // 返回 Promise<'keep' | 'delete' | null>：
+  //   'keep'   = 仅删材料（保留生词与进度）
+  //   'delete' = 连同生词本、进度一起删
+  //   null     = 取消
+  confirmDeleteMaterial(titleText) {
+    return new Promise(function (resolve) {
+      var backdrop = document.createElement("div");
+      backdrop.setAttribute("role", "dialog");
+      backdrop.setAttribute("aria-modal", "true");
+      backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99999;padding:16px;";
+      var card = document.createElement("div");
+      card.style.cssText = "background:var(--card,#fff);color:var(--fg,#222);max-width:360px;width:100%;border-radius:14px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.25);font-family:inherit;";
+      var h = document.createElement("div");
+      h.textContent = titleText || "删除材料";
+      h.style.cssText = "font-size:16px;font-weight:700;margin-bottom:6px;";
+      var p = document.createElement("div");
+      p.style.cssText = "font-size:13px;line-height:1.65;opacity:.86;margin-bottom:16px;";
+      p.innerHTML = "是否<b>同时删除生词本</b>？<br><br>选「仅删材料」可<b>保留已学的生词与进度</b>，之后重载材料时能继续学习，不会丢失数据。";
+      var wrap = document.createElement("div");
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:10px;";
+
+      function done(v) {
+        if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+        document.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function onKey(e) { if (e.key === "Escape") done(null); }
+
+      var bKeep = document.createElement("button");
+      bKeep.textContent = "仅删材料（保留生词与进度）";
+      bKeep.style.cssText = "padding:11px 12px;border-radius:10px;border:1px solid var(--accent,#3b82f6);background:var(--accent,#3b82f6);color:#fff;font-size:14px;font-weight:600;cursor:pointer;";
+      bKeep.onclick = function () { done("keep"); };
+
+      var bDel = document.createElement("button");
+      bDel.textContent = "连同生词本一起删除";
+      bDel.style.cssText = "padding:11px 12px;border-radius:10px;border:1px solid var(--rec,#e23);background:transparent;color:var(--rec,#e23);font-size:14px;cursor:pointer;";
+      bDel.onclick = function () { done("delete"); };
+
+      var bCancel = document.createElement("button");
+      bCancel.textContent = "取消";
+      bCancel.style.cssText = "padding:9px;border-radius:10px;border:none;background:transparent;color:var(--fg,#222);opacity:.55;font-size:13px;cursor:pointer;";
+      bCancel.onclick = function () { done(null); };
+
+      wrap.appendChild(bKeep);
+      wrap.appendChild(bDel);
+      wrap.appendChild(bCancel);
+      card.appendChild(h);
+      card.appendChild(p);
+      card.appendChild(wrap);
+      backdrop.appendChild(card);
+      document.body.appendChild(backdrop);
+      document.addEventListener("keydown", onKey);
+      setTimeout(function () { try { bKeep.focus(); } catch (_) {} }, 0);
+    });
   },
 
   // 把某 materialId 写入云端的「已删除列表」（user_settings.deleted_ids）

@@ -938,11 +938,13 @@
     if (!isFinite(s)) s = 0;
     if (!isFinite(e) || e <= s) e = Math.min(audio.duration, s + 1);
     if (e > audio.duration) e = audio.duration;
-    state.programmaticSeek = true;
-    audio.currentTime = s;
-    state.previewEnd = e;
-    const p = audio.play();
-    if (p && p.catch) p.catch(function () {});
+    state.previewEnd = null; // 先清掉旧的结束点，避免 seek 期间误用过期区间提前停
+    // 同样先精确 seek 再播放，避免 iOS 从旧位置起播导致试听区间错位
+    seekAndPlay(s, function () {
+      state.previewEnd = e;
+      const p = audio.play();
+      if (p && p.catch) p.catch(function () {});
+    });
   }
 
   function buildEditRow(s, i) {
@@ -1151,22 +1153,41 @@
     }
   }
 
+  // 精确 seek 后播放：先等浏览器真的把播放位置移动到 target，再 play()。
+  // 关键修复：iOS Safari 在「设置 currentTime 后立即 play」时会从旧位置开始播，
+  // 导致逐句播放越播越偏（刷新后第一句正确、之后漂移）。等 seeked 事件可根除该问题。
+  function seekAndPlay(target, onReady) {
+    function begin() {
+      if (Math.abs(audio.currentTime - target) < 0.001) { onReady(); return; }
+      let done = false;
+      function ready() {
+        if (done) return; done = true;
+        state.programmaticSeek = false;
+        onReady();
+      }
+      state.programmaticSeek = true;
+      audio.addEventListener("seeked", ready, { once: true });
+      setTimeout(ready, 300); // 兜底：个别格式/浏览器不触发 seeked 时也能继续
+      audio.currentTime = target;
+    }
+    if (audio.readyState >= 1 && isFinite(audio.duration)) begin();
+    else audio.addEventListener("loadedmetadata", begin, { once: true });
+  }
+
   function playSentence(i) {
     if (i < 0 || i >= state.sentences.length) return;
     const s = state.sentences[i];
     state.lastIndex = i;
     state.playingIndex = i;
+    state._hl = i;
     audio.playbackRate = state.rate;
     highlight(i);
     syncPlayIcons();
-    function go() {
-      state.programmaticSeek = true;
-      audio.currentTime = s.start + 0.02;
+    // 严格按编辑分段的时间起播：seek 到 s.start（不再加 0.02 偏移）
+    seekAndPlay(s.start, function () {
       const p = audio.play();
       if (p && p.catch) p.catch(function () { toast("无法播放，请检查音频文件"); });
-    }
-    if (audio.readyState >= 1 && isFinite(audio.duration)) go();
-    else audio.addEventListener("loadedmetadata", go, { once: true });
+    });
   }
 
   // 暂停 / 继续：读到一半想停，点一下继续（不会跳句，从当前位置接着播）
@@ -1208,27 +1229,26 @@
     if (!cur) return;
     const t = audio.currentTime;
 
-    // 实时高亮：若播放位置已进入「下一句」区间，提前把高亮跟过去
-    // （处理时间戳边界误差 + 连播/拖拽场景，保证高亮始终跟随语音）
+    // 视觉高亮跟随语音：仅计算应高亮哪句，**绝不改动 playingIndex**，
+    // 否则高亮越界会把「停止判定」误用成下一句的结束时间 → 逐句时长漂移
+    let hl = state.playingIndex;
     if (t > cur.start) {
-      for (let i = state.playingIndex + 1; i < state.sentences.length; i++) {
-        const ns = state.sentences[i];
-        if (t >= ns.start) {
-          state.playingIndex = i;
-          highlight(i);
-          break;
-        } else break;
+      for (let k = state.playingIndex + 1; k < state.sentences.length; k++) {
+        if (t >= state.sentences[k].start) hl = k; else break;
       }
     }
+    if (hl !== state._hl) { state._hl = hl; highlight(hl); }
 
-    if (t >= cur.end - 0.04) {
+    // 停止点始终用「当前这句」的结束时间（严格按编辑分段，仅在末尾留 0.02s 余量）
+    if (t >= cur.end - 0.02) {
       if (state.loop) {
-        state.programmaticSeek = true;
-        audio.currentTime = cur.start + 0.02;
+        // 循环：同样先精确 seek 再续播，避免 iOS 循环点漂移
+        seekAndPlay(cur.start, function () { const p = audio.play(); if (p && p.catch) p.catch(function () {}); });
       } else {
         audio.pause();
         const done = state.playingIndex;
         state.playingIndex = null;
+        state._hl = null;
         highlight(null);
         syncPlayIcons();
         markPlayed(done);
@@ -1241,7 +1261,7 @@
     if (state.programmaticSeek) { state.programmaticSeek = false; return; }
     if (state.playingIndex != null) {
       const s = state.sentences[state.playingIndex];
-      if (s && Math.abs(audio.currentTime - (s.start + 0.02)) > 0.6) {
+      if (s && Math.abs(audio.currentTime - s.start) > 0.6) {
         state.playingIndex = null; highlight(null);
       }
     }
@@ -2131,47 +2151,51 @@
           if (delId === state.activeMaterialId) {
             toast("不能删除当前正在使用的材料"); return;
           }
-          // 先从渲染数据中取 audioPath（用于云端音频删除）
-          var libRows = window._libRawRows || [];
-          var targetRow = null;
-          for (var ri = 0; ri < libRows.length; ri++) {
-            if (libRows[ri] && libRows[ri].id === delId) { targetRow = libRows[ri]; break; }
-          }
-          var audioPath = (targetRow && targetRow.material && targetRow.material.meta && targetRow.material.meta.audioPath) || null;
-
-          // 记录"用户主动删除"的 ID，防止 applyCloudDataToLocal 又拉回来
-          window._deletedMaterialIds = window._deletedMaterialIds || new Set();
-          window._deletedMaterialIds.add(delId);
-          try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify([...window._deletedMaterialIds])); } catch(_) {}
-          // 清除音频同步标记，避免云端音频删掉后本地仍认为已同步而不重传
-          if (window.Sync && Sync.clearAudioSynced) Sync.clearAudioSynced(delId);
-
-          function doCloudDelete() {
-            if (!window.Sync || !Sync.isAuthed()) return;
-            Sync.deleteMaterial(delId, audioPath).then(function () {
-              console.log("[lib] 云端已删除:", delId);
-              // 成功后从已删记录中移除（可选，保留也无害）
-            }).catch(function (e) {
-              console.warn("[lib] 云端删除失败:", e);
-              toast("云端删除失败，请检查网络后重试");
-            });
-          }
-
-          // 如果 Sync 已登录 → 立即删云端；否则等登录后再删
-          if (window.Sync && Sync.isAuthed()) {
-            doCloudDelete();
-          } else {
-            // 等待 Sync 登录完成再补删
-            if (window.Sync) {
-              Sync.onAuthChange(function (u) { if (u) doCloudDelete(); });
+          // 弹二选一：仅删材料（保留生词进度）/ 连同生词本删除 / 取消
+          Sync.confirmDeleteMaterial("从材料库删除").then(function (choice) {
+            if (!choice) { toast("已取消删除"); return; }
+            var deleteVocab = (choice === "delete");
+            // 先从渲染数据中取 audioPath（用于云端音频删除）
+            var libRows = window._libRawRows || [];
+            var targetRow = null;
+            for (var ri = 0; ri < libRows.length; ri++) {
+              if (libRows[ri] && libRows[ri].id === delId) { targetRow = libRows[ri]; break; }
             }
-            toast("本地已删除，等待同步账号连接后删除云端…");
-          }
+            var audioPath = (targetRow && targetRow.material && targetRow.material.meta && targetRow.material.meta.audioPath) || null;
 
-          // 本地删除（立即执行）
-          _idbDelete(delId).then(function () {
-            renderLibrary();
-          }).catch(function () {});
+            // 记录"用户主动删除"的 ID，防止 applyCloudDataToLocal 又拉回来
+            window._deletedMaterialIds = window._deletedMaterialIds || new Set();
+            window._deletedMaterialIds.add(delId);
+            try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify([...window._deletedMaterialIds])); } catch(_) {}
+            // 清除音频同步标记，避免云端音频删掉后本地仍认为已同步而不重传
+            if (window.Sync && Sync.clearAudioSynced) Sync.clearAudioSynced(delId);
+
+            function doCloudDelete() {
+              if (!window.Sync || !Sync.isAuthed()) return;
+              Sync.deleteMaterial(delId, audioPath, { deleteVocab: deleteVocab }).then(function () {
+                console.log("[lib] 云端已删除:", delId, "deleteVocab:", deleteVocab);
+              }).catch(function (e) {
+                console.warn("[lib] 云端删除失败:", e);
+                toast("云端删除失败，请检查网络后重试");
+              });
+            }
+
+            // 如果 Sync 已登录 → 立即删云端；否则等登录后再删
+            if (window.Sync && Sync.isAuthed()) {
+              doCloudDelete();
+            } else {
+              // 等待 Sync 登录完成再补删
+              if (window.Sync) {
+                Sync.onAuthChange(function (u) { if (u) doCloudDelete(); });
+              }
+              toast("本地已删除，等待同步账号连接后删除云端…");
+            }
+
+            // 本地删除（立即执行）
+            _idbDelete(delId).then(function () {
+              renderLibrary();
+            }).catch(function () {});
+          });
         });
       });
     }).catch(function () {
@@ -2222,7 +2246,7 @@
         var mats = (data && data.materials) || [];
         var promises = [];
         mats.forEach(function (m) {
-          promises.push(Sync.deleteMaterial(m.id, m.audioPath || null).catch(function(e){console.warn("删云端失败:",m.id,e)}));
+          promises.push(Sync.deleteMaterial(m.id, m.audioPath || null, { deleteVocab: true }).catch(function(e){console.warn("删云端失败:",m.id,e)}));
           promises.push(window._idbDelete(m.id).catch(function(){}));
         });
         return Promise.all(promises);
