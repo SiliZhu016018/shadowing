@@ -1286,6 +1286,22 @@
         } catch (e) { reject(e); return; }
 
         // 3) 确保上下文已运行（suspended → resume），再解码
+        // 3.5) ✅ iOS 双层解锁：iOS Safari 有两把独立的锁：
+        //   - 锁 A: AudioContext 必须 resume（上面已处理）
+        //   - 锁 B: <audio>.play() 必须在用户手势内调用过至少一次，否则底层音频输出子系统不激活
+        //     → Web Audio API 的 start() 静默不发声（不报错、ctx.state=running）
+        //   解法：在用户手势内 play+立即 pause（激活但不真的播放出声）
+        if (_isIOS() && audio && audio.paused) {
+          var unlockPromise = audio.play();
+          if (unlockPromise && unlockPromise.then) {
+            unlockPromise.then(function () { audio.pause(); console.log("[WA] ✓ iOS <audio> 双层解锁成功"); })
+                       .catch(function () { console.log("[WA] ⚠️ iOS <audio> 解锁被拒（正常，部分 Safari 版本）"); });
+          } else {
+            // 旧 Safari: play() 同步成功
+            audio.pause();
+          }
+        }
+
         function doDecode() {
           // ✅ 回调风格 decodeAudioData（iOS 兼容）
           try {
@@ -1370,6 +1386,7 @@
     // ✅ 关键：iOS 上必须确保 AudioContext 是 running 状态再 start()，
     //   否则 start() 静默执行但不发出声音（不报错）
     function doStart() {
+      console.log("[WA] doStart() 开始创建 source node...");
       _wa.src = _wa.ctx.createBufferSource();
       _wa.src.buffer = _wa.buf;
       _wa.src.playbackRate.value = state.rate;
@@ -1384,8 +1401,16 @@
       if (_wa.buf && (offset + dur > _wa.buf.duration)) dur = _wa.buf.duration - offset;
       if (!(dur > 0)) dur = 0.05;
 
+      console.log("[WA] start(0, " + offset.toFixed(2) + ", " + dur.toFixed(2) + ") | buf.duration=" +
+        (_wa.buf ? _wa.buf.duration.toFixed(1) : "?") + " | buf.length=" +
+        (_wa.buf ? _wa.buf.length : "?") + " | sampleRate=" +
+        (_wa.buf ? _wa.buf.sampleRate : "?") + " | channels=" +
+        (_wa.buf ? _wa.buf.numberOfChannels : "?"));
+
       try {
         _wa.src.start(0, offset, dur);
+        _wa._startTs = Date.now();
+        console.log("[WA] ✓ start() 已调用，等待音频输出...");
       } catch (e) {
         console.warn("[WA] start() 异常:", e);
         _wa.playing = false;
@@ -1395,6 +1420,8 @@
 
       // 句子结束处理：自动停止 → 标记已读 → 自动进下一句或循环
       _wa.src.onended = function () {
+        var playedMs = Date.now();
+        console.log("[WA] onended 触发 | 句子", i, "| 距 start() 约", (playedMs - (_wa._startTs || playedMs)), "ms");
         _wa.src = null;
         _wa.playing = false;
         _waStopProgressMonitor();
