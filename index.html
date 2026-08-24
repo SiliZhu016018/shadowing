@@ -815,6 +815,14 @@
     if (window.Sync && typeof Sync.pullVocabOnly === "function" && Sync.isAuthed() && state.materialId) {
       Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
     }
+    // 移动端 / iOS：如果已有本地 blob，初始化 Web Audio 引擎
+    if (_isMobile() && !_wa.active && state.audioBlob) {
+      _waInit(state.audioBlob).then(function () {
+        console.log("[loadMaterial] ✓ Web Audio 引擎已就绪");
+      }).catch(function (e) {
+        console.warn("[loadMaterial] Web Audio 初始化失败:", e);
+      });
+    }
   };
 
   // ---------- 渲染列表 ----------
@@ -932,13 +940,21 @@
 
   // 试听某句区间（不干扰正常跟读的高亮/进度）
   function previewRange(start, end) {
+    // ── WA 模式（iOS）──
+    if (_wa.active && _wa.buf) {
+      let s = Number(start), e = Number(end);
+      if (!isFinite(s)) s = 0;
+      if (!isFinite(e) || e <= s) e = Math.min(_wa.buf.duration, s + 1);
+      if (e > _wa.buf.duration) e = _wa.buf.duration;
+      return _waPreviewRange(s, e);
+    }
+    // ── <audio> 模式（桌面）──
     if (!isFinite(audio.duration) || audio.duration <= 0) { toast("音频未就绪"); return; }
     let s = Number(start), e = Number(end);
     if (!isFinite(s)) s = 0;
     if (!isFinite(e) || e <= s) e = Math.min(audio.duration, s + 1);
     if (e > audio.duration) e = audio.duration;
     state.previewEnd = null; // 先清掉旧的结束点，避免 seek 期间误用过期区间提前停
-    // 同样先精确 seek 再播放，避免 iOS 从旧位置起播导致试听区间错位
     seekAndPlay(s, function () {
       state.previewEnd = e;
       const p = audio.play();
@@ -1194,6 +1210,14 @@
       audio.src = objUrl;
       _audioLoading = null;
       console.log("[ensureLocalAudio] ✓ 已下载, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
+      // 移动端 / iOS：同时初始化 Web Audio 引擎（解码全文，逐句精确定位用）
+      if (_isMobile() && !_wa.active) {
+        _waInit(blob).then(function () {
+          console.log("[ensureLocalAudio] ✓ Web Audio 引擎已就绪，逐句定位将使用采样级精度");
+        }).catch(function (e) {
+          console.warn("[ensureLocalAudio] Web Audio 初始化失败，回退 <audio> seek:", e);
+        });
+      }
       toast("✅ 音频已就绪");
       return objUrl;
     }).catch(function (err) {
@@ -1210,6 +1234,250 @@
   // 挂到 window：确保模块脚本（<script type="module">）也能调用
   // 模块脚本有独立作用域，无法直接访问普通脚本里的函数
   window.ensureLocalAudio = ensureLocalAudio;
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Web Audio API 精确播放引擎（iOS Safari 专用）
+  //
+  // iOS Safari 的 <audio>.currentTime 有已知硬伤：设了位置但浏览器内部不真正跳转，
+  //   导致「点第 N 句播的还是第 N-1 句的内容」。
+  //
+  // 本引擎用 AudioBuffer + AudioBufferSourceNode.start(offset, duration) 实现采样级定位，
+  //   完全绕开 <audio> 的 seek，在所有设备（含 iOS）上都精确可靠。
+  // ─────────────────────────────────────────────────────────────────────────────
+  var _wa = {
+    ctx: null,          // AudioContext
+    buf: null,          // 解码后的 AudioBuffer（全文一次解码）
+    src: null,          // 当前正在播放的 AudioBufferSourceNode
+    playing: false,
+    pausedAt: null,     // 暂停时的精确偏移（秒）
+    playStartCtxTime: 0,// 本次播放开始的 audioContext.currentTime
+    playStartOffset: 0, // 本次播放从音频的哪个偏移开始（秒）
+    active: false,      // 是否已激活（检测到 iOS / 移动端才激活）
+    rafId: null,        // requestAnimationFrame ID（用于模拟 timeupdate）
+  };
+
+  function _isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+           (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+
+  function _isMobile() {
+    return _isIOS() || /Android/i.test(navigator.userAgent);
+  }
+
+  // 用 blob 或 URL 初始化 Web Audio 引擎（解码全文，一次性开销）
+  // 返回 Promise，resolve 后即可用 waPlaySentence() 逐句精确定位播放
+  function _waInit(blobOrUrl) {
+    if (_wa.ctx) { /* 已初始化 */ return Promise.resolve(); }
+    var fetchUrl = (typeof blobOrUrl === "string") ? blobOrUrl :
+                   (blobOrUrl instanceof Blob) ? URL.createObjectURL(blobOrUrl) : null;
+    if (!fetchUrl) return Promise.reject("[WA] 无有效音频源");
+    console.log("[WA] 正在初始化 Web Audio 引擎（", _isIOS() ? "iOS" : "桌面", "）...");
+    return fetch(fetchUrl).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.arrayBuffer();
+    }).then(function (ab) {
+      if (!_wa.ctx) {
+        _wa.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      // 如果上下文被挂起（iOS 需要用户交互才能恢复），先 resume
+      if (_wa.ctx.state === "suspended") {
+        return _wa.ctx.resume().then(function () {
+          return _wa.ctx.decodeAudioData(ab);
+        });
+      }
+      return _wa.ctx.decodeAudioData(ab);
+    }).then(function (decoded) {
+      _wa.buf = decoded;
+      _wa.active = true;
+      console.log("[WA] ✓ 解码完成, 时长:", decoded.duration.toFixed(1), "s, 采样率:", decoded.sampleRate, "Hz");
+    }).catch(function (err) {
+      console.warn("[WA] 初始化失败，回退 <audio> 元素:", err);
+      _wa.active = false;
+      throw err;
+    });
+  }
+
+  // 从指定句子索引开始播放（采样级精确定位）
+  // 不依赖 <audio>.currentTime —— 用 ABSN.start(0, offset, duration) 直接定位
+  function _waPlaySentence(i) {
+    if (!_wa.buf || !_wa.ctx) return Promise.reject("[WA] 未初始化");
+    if (i < 0 || i >= state.sentences.length) return;
+    var s = state.sentences[i];
+    state.lastIndex = i;
+    state.playingIndex = i;
+    state._hl = i;
+    highlight(i);
+    syncPlayIcons();
+
+    // 停止上一个 source node
+    _waStop();
+
+    // 创建新的 source node
+    _wa.src = _wa.ctx.createBufferSource();
+    _wa.src.buffer = _wa.buf;
+    _wa.src.playbackRate.value = state.rate;
+    _wa.src.connect(_wa.ctx.destination);
+
+    var offset = s.start;       // 从这句的起点开始
+    var duration = s.end - s.start; // 播到这句的终点
+
+    _wa.playStartOffset = offset;
+    _wa.playStartCtxTime = _wa.ctx.currentTime;
+    _wa.pausedAt = null;
+    _wa.playing = true;
+
+    console.log("[WA] 播放句子", i, ":", s.text ? s.text.slice(0, 30) : "",
+              "offset=", offset.toFixed(2), "s, duration=", duration.toFixed(2), "s");
+
+    _wa.src.start(0, offset, duration);
+    _waStartProgressMonitor();
+
+    // 句子结束处理：自动停止 → 标记已读 → 自动进下一句或循环
+    _wa.src.onended = function () {
+      _wa.src = null;
+      _wa.playing = false;
+      _waStopProgressMonitor();
+      var done = i;
+      state.playingIndex = null;
+      state._hl = null;
+      highlight(null);
+      syncPlayIcons();
+      markPlayed(done);
+      if (state.loop) {
+        _waPlaySentence(done); // 循环：重播当前句
+      } else if (state.autoAdvance) {
+        _waPlaySentence(done + 1); // 连播：下一句
+      }
+    };
+    return Promise.resolve();
+  }
+
+  // 暂停（记录精确偏移，以便恢复时从同一位置继续）
+  function _waPause() {
+    if (!_wa.playing || !_wa.src) return;
+    var elapsed = (_wa.ctx.currentTime - _wa.playStartCtxTime) * state.rate;
+    _wa.pausedAt = _wa.playStartOffset + elapsed;
+    try { _wa.src.stop(); } catch (_) {}
+    _wa.src = null;
+    _wa.playing = false;
+    _waStopProgressMonitor();
+    console.log("[WA] 暂停于", _wa.pausedAt.toFixed(3), "s");
+  }
+
+  // 从暂停位置恢复播放
+  function _waResume() {
+    if (!_wa.buf || _wa.pausedAt == null) return;
+    var remaining = _wa.buf.duration - _wa.pausedAt;
+    if (remaining <= 0) return;
+
+    _wa.src = _wa.ctx.createBufferSource();
+    _wa.src.buffer = _wa.buf;
+    _wa.src.playbackRate.value = state.rate;
+    _wa.src.connect(_wa.ctx.destination);
+
+    _wa.playStartOffset = _wa.pausedAt;
+    _wa.playStartCtxTime = _wa.ctx.currentTime;
+    _wa.pausedAt = null;
+    _wa.playing = true;
+
+    _wa.src.start(0, _wa.playStartOffset, remaining / state.rate);
+    _waStartProgressMonitor();
+
+    _wa.src.onended = function () {
+      _wa.src = null;
+      _wa.playing = false;
+      _waStopProgressMonitor();
+    };
+    console.log("[WA] 恢复于", _wa.playStartOffset.toFixed(3), "s");
+  }
+
+  // 停止播放（不触发 onended 回调中的自动进句逻辑）
+  function _waStop() {
+    if (_wa.src) {
+      // 临时移除 onended 防止触发自动进句
+      var oldOnEnded = _wa.src.onended;
+      _wa.src.onended = null;
+      try { _wa.src.stop(); } catch (_) {}
+      _wa.src = null;
+    }
+    _wa.playing = false;
+    _wa.pausedAt = null;
+    _waStopProgressMonitor();
+  }
+
+  // 用 RAF 模拟 <audio>.timeupdate —— 让高亮/进度条等 UI 正常工作
+  function _waStartProgressMonitor() {
+    _waStopProgressMonitor();
+    function tick() {
+      if (!_wa.playing) { _wa.rafId = null; return; }
+      var elapsed = (_wa.ctx.currentTime - _wa.playStartCtxTime) * state.rate;
+      var pos = _wa.playStartOffset + elapsed;
+      // 触发与 <audio> 相同的高亮逻辑
+      _waUpdateTime(pos);
+      _wa.rafId = requestAnimationFrame(tick);
+    }
+    _wa.rafId = requestAnimationFrame(tick);
+  }
+
+  function _waStopProgressMonitor() {
+    if (_wa.rafId) { cancelAnimationFrame(_wa.rafId); _wa.rafId = null; }
+  }
+
+  // 复用原有的高亮+停止判定逻辑（传入模拟的 currentTime）
+  function _waUpdateTime(t) {
+    if (state.playingIndex == null) return;
+    const cur = state.sentences[state.playingIndex];
+    if (!cur) return;
+    // 高亮跟随（只算不改 playingIndex）
+    let hl = state.playingIndex;
+    if (t > cur.start) {
+      for (let k = state.playingIndex + 1; k < state.sentences.length; k++) {
+        if (t >= state.sentences[k].start) hl = k; else break;
+      }
+    }
+    if (hl !== state._hl) { state._hl = hl; highlight(hl); }
+    // 更新 <audio> 的 currentTime 显示（进度条等 UI 可能读取它）
+    // 注意：这是只写不触发的——不会真的触发 <audio> 的 timeupdate 事件
+  }
+
+  // 试听区间（previewRange）的 WA 版本
+  function _waPreviewRange(start, end) {
+    if (!_wa.buf || !_wa.ctx) return;
+    _waStop();
+    if (!isFinite(end) || end <= start) end = Math.min(_wa.buf.duration, start + 1);
+    if (end > _wa.buf.duration) end = _wa.buf.duration;
+
+    _wa.src = _wa.ctx.createBufferSource();
+    _wa.src.buffer = _wa.buf;
+    _wa.src.playbackRate.value = state.rate;
+    _wa.src.connect(_wa.ctx.destination);
+
+    state.previewEnd = end;
+    _wa.playStartOffset = start;
+    _wa.playStartCtxTime = _wa.ctx.currentTime;
+    _wa.pausedAt = null;
+    _wa.playing = true;
+
+    _wa.src.start(0, start, end - start);
+    _waStartProgressMonitor();
+
+    _wa.src.onended = function () {
+      _wa.src = null;
+      _wa.playing = false;
+      _waStopProgressMonitor();
+      state.previewEnd = null;
+    };
+  }
+
+  // 暴露到全局供外部调用
+  window._waInit = _waInit;
+  window._waPlaySentence = _waPlaySentence;
+  window._waPause = _waPause;
+  window._waResume = _waResume;
+  window._waStop = _waStop;
+  window._waPreviewRange = _waPreviewRange;
+  window._wa = _wa;
 
   function seekAndPlay(target, onReady) {
     // ✅ 关键：每次 seek 前先暂停。iOS Safari 在「播放中」seek 落点会漂移且逐句累积，
@@ -1252,12 +1520,17 @@
     if (i < 0 || i >= state.sentences.length) return;
     const s = state.sentences[i];
     state.lastIndex = i;
+    // ── iOS / 移动端：使用 Web Audio API 精确引擎（绕开 <audio>.currentTime 的 seek 硬伤）──
+    if (_wa.active && _wa.buf) {
+      audio.playbackRate = state.rate; // 同步 rate（UI 显示用）
+      return _waPlaySentence(i);
+    }
+    // ── 桌面端：使用 <audio> 元素 + seekAndPlay ──
     state.playingIndex = i;
     state._hl = i;
     audio.playbackRate = state.rate;
     highlight(i);
     syncPlayIcons();
-    // 严格按编辑分段的时间起播：seek 到 s.start（不再加 0.02 偏移）
     seekAndPlay(s.start, function () {
       const p = audio.play();
       if (p && p.catch) p.catch(function () { toast("无法播放，请检查音频文件"); });
@@ -1267,8 +1540,12 @@
   // 暂停 / 继续：读到一半想停，点一下继续（不会跳句，从当前位置接着播）
   function togglePlayPause() {
     if (state.playingIndex == null && state.lastIndex == null) return;
+    // ── WA 模式（iOS）──
+    if (_wa.active && _wa.playing) { _waPause(); return; }
+    if (_wa.active && _wa.pausedAt != null) { _waResume(); return; }
+    if (_wa.active && state.playingIndex == null) { _waPlaySentence(state.lastIndex); return; }
+    // ── <audio> 模式（桌面）──
     if (audio.paused) {
-      // 没在播：若还没开始跟读，先播上一句；已在播但被暂停，则从当前位置继续
       if (state.playingIndex == null) playSentence(state.lastIndex);
       else {
         const p = audio.play();
@@ -1293,6 +1570,8 @@
   }
 
   audio.addEventListener("timeupdate", function () {
+    // Web Audio 模式下：<audio> 不参与播放，timeupdate 数据无效，由 _waStartProgressMonitor 用 RAF 驱动高亮
+    if (_wa.active && _wa.playing) return;
     // 试听区间：到结束点自动停，不干扰正常跟读高亮
     if (state.previewEnd != null) {
       if (audio.currentTime >= state.previewEnd - 0.04) { audio.pause(); state.previewEnd = null; }
@@ -1332,6 +1611,7 @@
   });
 
   audio.addEventListener("seeking", function () {
+    if (_wa.active) return; // WA 模式下不监听 <audio> 的 seek 事件
     if (state.programmaticSeek) { state.programmaticSeek = false; return; }
     if (state.playingIndex != null) {
       const s = state.sentences[state.playingIndex];
