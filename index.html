@@ -1357,44 +1357,76 @@
     // 停止上一个 source node
     _waStop();
 
-    // 创建新的 source node
-    _wa.src = _wa.ctx.createBufferSource();
-    _wa.src.buffer = _wa.buf;
-    _wa.src.playbackRate.value = state.rate;
-    _wa.src.connect(_wa.ctx.destination);
-
-    var offset = s.start;       // 从这句的起点开始
-    var duration = s.end - s.start; // 播到这句的终点
+    var offset = s.start;
+    var duration = s.end - s.start;
 
     _wa.playStartOffset = offset;
-    _wa.playStartCtxTime = _wa.ctx.currentTime;
     _wa.pausedAt = null;
-    _wa.playing = true;
 
     console.log("[WA] 播放句子", i, ":", s.text ? s.text.slice(0, 30) : "",
-              "offset=", offset.toFixed(2), "s, duration=", duration.toFixed(2), "s");
+              "offset=", offset.toFixed(2), "s, duration=", duration.toFixed(2), "s",
+              "ctx.state=", _wa.ctx.state);
 
-    _wa.src.start(0, offset, duration);
-    _waStartProgressMonitor();
+    // ✅ 关键：iOS 上必须确保 AudioContext 是 running 状态再 start()，
+    //   否则 start() 静默执行但不发出声音（不报错）
+    function doStart() {
+      _wa.src = _wa.ctx.createBufferSource();
+      _wa.src.buffer = _wa.buf;
+      _wa.src.playbackRate.value = state.rate;
+      _wa.src.connect(_wa.ctx.destination);
 
-    // 句子结束处理：自动停止 → 标记已读 → 自动进下一句或循环
-    _wa.src.onended = function () {
-      _wa.src = null;
-      _wa.playing = false;
-      _waStopProgressMonitor();
-      var done = i;
-      state.playingIndex = null;
-      state._hl = null;
-      highlight(null);
-      syncPlayIcons();
-      markPlayed(done);
-      if (state.loop) {
-        _waPlaySentence(done); // 循环：重播当前句
-      } else if (state.autoAdvance) {
-        _waPlaySentence(done + 1); // 连播：下一句
+      _wa.playStartCtxTime = _wa.ctx.currentTime;
+      _wa.playing = true;
+
+      // ✅ iOS 兜底：offset + duration 越界（末句/近 EOF）会直接抛异常被 catch 吞掉 → 静音。
+      //   先按音频总长夹住，避免无声音。
+      var dur = duration;
+      if (_wa.buf && (offset + dur > _wa.buf.duration)) dur = _wa.buf.duration - offset;
+      if (!(dur > 0)) dur = 0.05;
+
+      try {
+        _wa.src.start(0, offset, dur);
+      } catch (e) {
+        console.warn("[WA] start() 异常:", e);
+        _wa.playing = false;
+        return;
       }
-    };
-    return Promise.resolve();
+      _waStartProgressMonitor();
+
+      // 句子结束处理：自动停止 → 标记已读 → 自动进下一句或循环
+      _wa.src.onended = function () {
+        _wa.src = null;
+        _wa.playing = false;
+        _waStopProgressMonitor();
+        var done = i;
+        state.playingIndex = null;
+        state._hl = null;
+        highlight(null);
+        syncPlayIcons();
+        markPlayed(done);
+        if (state.loop) {
+          _waPlaySentence(done);
+        } else if (state.autoAdvance) {
+          _waPlaySentence(done + 1);
+        }
+      };
+    }
+
+    if (_wa.ctx.state === "suspended") {
+      var pr = _wa.ctx.resume();
+      if (pr && pr.then) pr.then(doStart).catch(function (e) { console.warn("[WA] resume 失败:", e); });
+      else doStart();
+    } else if (_wa.ctx.state === "running" || _wa.ctx.state === "interrupted") {
+      doStart();
+    } else {
+      // closed 或其他状态：尝试重新创建
+      console.warn("[WA] AudioContext 状态异常:", _wa.ctx.state, "，尝试重建");
+      try { _wa.ctx.close(); } catch (_) {}
+      _wa.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var pr2 = _wa.ctx.resume();
+      if (pr2 && pr2.then) pr2.then(doStart).catch(doStart);
+      else setTimeout(doStart, 100);
+    }
   }
 
   // 暂停（记录精确偏移，以便恢复时从同一位置继续）
@@ -1415,25 +1447,34 @@
     var remaining = _wa.buf.duration - _wa.pausedAt;
     if (remaining <= 0) return;
 
-    _wa.src = _wa.ctx.createBufferSource();
-    _wa.src.buffer = _wa.buf;
-    _wa.src.playbackRate.value = state.rate;
-    _wa.src.connect(_wa.ctx.destination);
+    var offset = _wa.pausedAt;
+    var dur = remaining / state.rate;
 
-    _wa.playStartOffset = _wa.pausedAt;
-    _wa.playStartCtxTime = _wa.ctx.currentTime;
-    _wa.pausedAt = null;
-    _wa.playing = true;
+    function doStart() {
+      _wa.src = _wa.ctx.createBufferSource();
+      _wa.src.buffer = _wa.buf;
+      _wa.src.playbackRate.value = state.rate;
+      _wa.src.connect(_wa.ctx.destination);
 
-    _wa.src.start(0, _wa.playStartOffset, remaining / state.rate);
-    _waStartProgressMonitor();
+      _wa.playStartOffset = offset;
+      _wa.playStartCtxTime = _wa.ctx.currentTime;
+      _wa.pausedAt = null;
+      _wa.playing = true;
 
-    _wa.src.onended = function () {
-      _wa.src = null;
-      _wa.playing = false;
-      _waStopProgressMonitor();
-    };
-    console.log("[WA] 恢复于", _wa.playStartOffset.toFixed(3), "s");
+      try { _wa.src.start(0, offset, dur); } catch (e) { console.warn("[WA] resume start() 异常:", e); return; }
+      _waStartProgressMonitor();
+
+      _wa.src.onended = function () { _wa.src = null; _wa.playing = false; _waStopProgressMonitor(); };
+      console.log("[WA] 恢复于", offset.toFixed(3), "s");
+    }
+
+    if (_wa.ctx.state === "suspended") {
+      var pr = _wa.ctx.resume();
+      if (pr && pr.then) pr.then(doStart).catch(doStart);
+      else doStart();
+    } else {
+      doStart();
+    }
   }
 
   // 停止播放（不触发 onended 回调中的自动进句逻辑）
