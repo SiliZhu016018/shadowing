@@ -197,6 +197,8 @@
   .rv-show { background: var(--panel); color: var(--text); border: 1px solid var(--border-strong); }
   .rv-good { background: var(--ok); color: #fff; border: none; box-shadow: 0 4px 14px rgba(34,197,94,.35); }
   .rv-again { background: rgba(239,68,68,.10); color: var(--rec); border: 1px solid rgba(239,68,68,.35); }
+  .rv-fuzzy { background: rgba(245,158,11,.12); color: #b45309; border: 1px solid rgba(245,158,11,.45); }
+  .rv-easy { background: var(--accent); color: #fff; border: none; box-shadow: 0 4px 14px rgba(59,130,246,.35); }
   .rv-exit { margin-top: 12px; width: 100%; padding: 9px; font-size: 13px; border-radius: 10px; background: transparent; border: 1px solid var(--border-strong); color: var(--muted); }
   .vp-review-done { text-align: center; padding: 40px 12px; font-size: 18px; font-weight: 700; }
   .vp-review-done small { display: block; color: var(--muted); font-weight: 400; margin-top: 8px; font-size: 13px; }
@@ -241,7 +243,7 @@
   <header class="page-hd">
     <div>
       <h1>📖 生词本</h1>
-      <p class="sub">跨所有材料整合 · 艾宾浩斯遗忘曲线调度复习</p>
+      <p class="sub">跨所有材料整合 · SM-2 间隔重复算法调度复习</p>
     </div>
     <div class="header-cta">
       <button id="btn-back" class="btn-ghost">返回列表</button>
@@ -321,14 +323,20 @@ window._idbDelete = function (id) {
   });
 };
 
-/* ========== 艾宾浩斯遗忘曲线调度 ========== */
-var REVIEW_INTERVALS = [5, 30, 12 * 60, 24 * 60, 2 * 24 * 60, 4 * 24 * 60, 7 * 24 * 60, 15 * 24 * 60];
-var MASTERED_MAINTAIN_MIN = 30 * 24 * 60;
-var MIN_MS = 60000;
+/* ========== SM-2 间隔重复调度 ========== */
+var DAY_MS = 86400000;
+var SM2_EF_INIT = 2.5;        // 初始难度系数（easiness factor）
+var SM2_EF_MIN = 1.3;         // 难度系数下限（SuperMemo 规定）
+var SM2_MASTER_DAYS = 21;     // 间隔 ≥ 该天数视为「已掌握」
+var SM2_FIRST = 1;            // 首次正确复习间隔（天）
+var SM2_SECOND = 6;           // 第二次正确复习间隔（天）
 
 function normalizeVocabItem(v) {
   if (v.level == null || isNaN(v.level)) v.level = 0;
   if (v.reps == null || isNaN(v.reps)) v.reps = 0;
+  if (v.ef == null || isNaN(v.ef)) v.ef = SM2_EF_INIT;
+  // 旧数据无 interval：曾「已掌握」(level≥8) 的保留掌握态，其余从 1 天起步由 SM-2 重建
+  if (v.interval == null || isNaN(v.interval)) v.interval = (v.level || 0) >= 8 ? SM2_MASTER_DAYS : 1;
   if (!v.createdAt) v.createdAt = new Date().toISOString();
   if (!v.due || isNaN(v.due)) v.due = Date.parse(v.createdAt) || Date.now();
   if (v.lastReview === undefined) v.lastReview = null;
@@ -336,34 +344,38 @@ function normalizeVocabItem(v) {
   return v;
 }
 function isDue(v) { return (v.due || 0) <= Date.now(); }
-function isMastered(v) { return (v.level || 0) >= REVIEW_INTERVALS.length; }
+function isMastered(v) { return (v.interval || 0) >= SM2_MASTER_DAYS; }
 function nextDueLabel(v) {
   if (isDue(v)) return "待复习";
   var ms = (v.due || 0) - Date.now();
-  if (ms < 3600000) return Math.max(1, Math.round(ms / MIN_MS)) + " 分钟后";
-  if (ms < 86400000) return Math.max(1, Math.round(ms / 3600000)) + " 小时后";
-  return Math.max(1, Math.round(ms / 86400000)) + " 天后";
+  if (ms < 3600000) return Math.max(1, Math.round(ms / 60000)) + " 分钟后";
+  if (ms < DAY_MS) return Math.max(1, Math.round(ms / 3600000)) + " 小时后";
+  return Math.max(1, Math.round(ms / DAY_MS)) + " 天后";
 }
-function scheduleWord(v, grade) {
+// SM-2 核心：q = 回忆质量（0–5，<3 视为失败需重学）
+function sm2Review(v, q) {
+  q = Math.max(0, Math.min(5, q | 0));
   var now = Date.now();
   v.lastReview = now;
-  if (grade === "good") {
-    v.reps = (v.reps || 0) + 1;
-    v.level = (v.level || 0) + 1;
-    var iv = v.level >= REVIEW_INTERVALS.length ? MASTERED_MAINTAIN_MIN : REVIEW_INTERVALS[v.level];
-    v.due = now + iv * MIN_MS;
-    v.lastGrade = "good";
-  } else {
-    v.level = 0;
+  if (q < 3) {
     v.reps = 0;
-    v.due = now + REVIEW_INTERVALS[0] * MIN_MS;
-    v.lastGrade = "again";
+    v.interval = SM2_FIRST;                 // 失败：次日重新学习
+  } else {
+    if (v.reps === 0) v.interval = SM2_FIRST;
+    else if (v.reps === 1) v.interval = SM2_SECOND;
+    else v.interval = Math.max(1, Math.round(v.interval * v.ef));
+    v.reps += 1;
   }
+  // 更新难度系数：回忆越轻松 ef 越高，越吃力 ef 越低（下限 1.3）
+  v.ef = v.ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+  if (v.ef < SM2_EF_MIN) v.ef = SM2_EF_MIN;
+  v.due = now + v.interval * DAY_MS;
+  v.lastGrade = q;
 }
 function classify(v) {
   if (isMastered(v)) return "mastered";
   if (isDue(v)) return "due";
-  if ((v.level || 0) >= 3) return "solid";
+  if ((v.reps || 0) >= 2) return "solid";
   return "ok";
 }
 
@@ -405,7 +417,7 @@ function loadAllEntries() {
           idx: i,
           word: v.word, note: v.note, example: v.example,
           srcSentenceIdx: v.srcSentenceIdx, srcText: v.srcText,
-          level: v.level, reps: v.reps, due: v.due, lastReview: v.lastReview, lastGrade: v.lastGrade
+          level: v.level, reps: v.reps, ef: v.ef, interval: v.interval, createdAt: v.createdAt, due: v.due, lastReview: v.lastReview, lastGrade: v.lastGrade
         });
       });
     });
@@ -463,7 +475,7 @@ function statusChipHtml(e) {
   if (cat === "mastered") label = "🌟 已掌握 · " + nextDueLabel(e);
   else if (cat === "due") label = "🔴 待复习";
   else if (cat === "solid") label = "🟠 巩固中 · " + nextDueLabel(e);
-  else label = "🔵 第 " + ((e.level || 0) + 1) + "/" + REVIEW_INTERVALS.length + " 阶 · " + nextDueLabel(e);
+  else label = "🔵 连对 " + (e.reps || 0) + " 次 · 间隔 " + (e.interval || 1) + " 天 · " + nextDueLabel(e);
   return '<span class="vp-status ' + cat + '" data-rid="' + e.materialId + "|" + e.idx + '" title="点击单独复习">' + label + "</span>";
 }
 
@@ -622,7 +634,7 @@ function renderReview() {
   var v = STATE.reviewQueue[STATE.reviewPos];
   var total = STATE.reviewQueue.length;
   var pos = STATE.reviewPos + 1;
-  var stageTxt = isMastered(v) ? "已掌握 · 维护复习" : "第 " + ((v.level || 0) + 1) + " / " + REVIEW_INTERVALS.length + " 阶";
+  var stageTxt = isMastered(v) ? "已掌握 · 维护复习" : "连对 " + (v.reps || 0) + " 次 · 间隔 " + (v.interval || 1) + " 天（难度 " + (v.ef || 2.5).toFixed(2) + "）";
   var srcExists = v.srcSentenceIdx != null && !isNaN(v.srcSentenceIdx) && v.__materialSentences && v.__materialSentences[v.srcSentenceIdx];
   wrap.innerHTML =
     '<div class="vp-review">' +
@@ -638,23 +650,29 @@ function renderReview() {
         "</div>" +
         '<div class="rv-actions">' +
           '<button id="rv-show" class="rv-show">👀 显示答案</button>' +
-          '<button id="rv-again" class="rv-again" style="display:none">✗ 忘了</button>' +
-          '<button id="rv-good" class="rv-good" style="display:none">✓ 记得</button>' +
+          '<button id="rv-q1" class="rv-again" style="display:none">✗ 忘了</button>' +
+          '<button id="rv-q3" class="rv-fuzzy" style="display:none">？ 模糊</button>' +
+          '<button id="rv-q4" class="rv-good" style="display:none">✓ 记得</button>' +
+          '<button id="rv-q5" class="rv-easy" style="display:none">⭐ 熟练</button>' +
         "</div>" +
         '<button id="rv-exit" class="rv-exit">退出复习</button>' +
       "</div>";
 
   var showBtn = document.getElementById("rv-show");
   var ans = document.getElementById("fc-answer");
-  var goodBtn = document.getElementById("rv-good");
-  var againBtn = document.getElementById("rv-again");
+  var q1Btn = document.getElementById("rv-q1");
+  var q3Btn = document.getElementById("rv-q3");
+  var q4Btn = document.getElementById("rv-q4");
+  var q5Btn = document.getElementById("rv-q5");
   showBtn.addEventListener("click", function () {
     ans.style.display = "block";
     showBtn.style.display = "none";
-    goodBtn.style.display = ""; againBtn.style.display = "";
+    q1Btn.style.display = ""; q3Btn.style.display = ""; q4Btn.style.display = ""; q5Btn.style.display = "";
   });
-  goodBtn.addEventListener("click", function () { answerReview(v, "good"); });
-  againBtn.addEventListener("click", function () { answerReview(v, "again"); });
+  q1Btn.addEventListener("click", function () { answerReview(v, 1); });
+  q3Btn.addEventListener("click", function () { answerReview(v, 3); });
+  q4Btn.addEventListener("click", function () { answerReview(v, 4); });
+  q5Btn.addEventListener("click", function () { answerReview(v, 5); });
   document.getElementById("rv-exit").addEventListener("click", exitReview);
   var srcBtn = wrap.querySelector(".rv-src");
   if (srcBtn) {
@@ -666,23 +684,19 @@ function renderReview() {
   }
 }
 
-function answerReview(v, grade) {
-  scheduleWord(v, grade);
-  // 持久化
+function answerReview(v, q) {
+  sm2Review(v, q);
+  // 持久化：按 词 + 创建时间 精确定位原词条（扁平条目已带 createdAt）
   var vocab = loadVocab(v.__materialId);
-  var idx = vocab.findIndex(function (x) { return x.word === v.word && x.createdAt === v.createdAt; });
-  if (idx === -1) idx = STATE.reviewQueue.indexOf ? STATE.reviewQueue.indexOf(v) : -1;
-  // 简单粗暴：重新找一次
-  if (idx === -1) {
-    for (var i = 0; i < vocab.length; i++) {
-      if (vocab[i].word === v.word && vocab[i].createdAt === v.createdAt) { idx = i; break; }
-    }
+  var idx = -1;
+  for (var i = 0; i < vocab.length; i++) {
+    if (vocab[i].word === v.word && vocab[i].createdAt === v.createdAt) { idx = i; break; }
   }
   if (idx !== -1) {
     vocab[idx] = v;
     saveVocab(v.__materialId, vocab);
   }
-  STATE.reviewStats[grade === "good" ? "good" : "again"]++;
+  if (q < 3) STATE.reviewStats.again++; else STATE.reviewStats.good++;
   STATE.reviewPos++;
   loadAllEntries().then(renderReview);
 }
@@ -792,7 +806,7 @@ function renderCloudVocab(data) {
         idx: i,
         word: v.word, note: v.note, example: v.example,
         srcSentenceIdx: v.srcSentenceIdx, srcText: v.srcText,
-        level: v.level, reps: v.reps, due: v.due, lastReview: v.lastReview, lastGrade: v.lastGrade
+        level: v.level, reps: v.reps, ef: v.ef, interval: v.interval, createdAt: v.createdAt, due: v.due, lastReview: v.lastReview, lastGrade: v.lastGrade
       });
     });
   });
