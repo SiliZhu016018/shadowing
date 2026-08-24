@@ -912,6 +912,7 @@
       li.addEventListener("click", function (e) {
         if (e.target.closest("button")) return;
         if (e.target.closest(".vocab-hl")) return; // 生词高亮点击不触发播放
+        console.log("[click] 行点击 → playSentence(" + i + ") | _wa.active=" + _wa.active + " _wa.playing=" + _wa.playing + " _wa.pausedAt=" + _wa.pausedAt);
         playSentence(i);
       });
       li.addEventListener("keydown", function (e) {
@@ -1303,15 +1304,26 @@
         //   - 锁 B: <audio>.play() 必须在用户手势内调用过至少一次，否则底层音频输出子系统不激活
         //     → Web Audio API 的 start() 静默不发声（不报错、ctx.state=running）
         //   解法：在用户手势内 play+立即 pause（激活但不真的播放出声）
+        //   ⚠️ 安全网：play() 后必须确保 pause() + currentTime=0，否则 <audio> 会在后台播全文且无法被 WA 控制
         if (_isIOS() && audio && audio.paused) {
+          var _unlockDone = false;
+          function _ensureAudioStopped() {
+            if (_unlockDone) return;
+            _unlockDone = true;
+            audio.pause();
+            audio.currentTime = 0; // 归零防止残留播放位置
+            console.log("[WA] ✓ iOS <audio> 双层解锁完成（已强制停止）");
+          }
           var unlockPromise = audio.play();
           if (unlockPromise && unlockPromise.then) {
-            unlockPromise.then(function () { audio.pause(); console.log("[WA] ✓ iOS <audio> 双层解锁成功"); })
-                       .catch(function () { console.log("[WA] ⚠️ iOS <audio> 解锁被拒（正常，部分 Safari 版本）"); });
+            unlockPromise.then(_ensureAudioStopped)
+                       .catch(function () { _ensureAudioStopped(); });
           } else {
             // 旧 Safari: play() 同步成功
-            audio.pause();
+            _ensureAudioStopped();
           }
+          // 兜底：即使 promise 永远不 resolve，200ms 后也强制停
+          setTimeout(_ensureAudioStopped, 200);
         }
 
         function doDecode() {
@@ -1384,8 +1396,9 @@
 
     // 停止上一个 source node
     _waStop();
-    // ✅ 确保 <audio> 不在播放（防止 iOS 上 <audio> 和 WA 同时响）
+    // ✅ 安全网：确保 <audio> 完全静默（防止 iOS 上 <audio> 和 WA 同时响 / 解锁残留播放）
     if (!audio.paused) audio.pause();
+    audio.currentTime = 0;
 
     var offset = s.start;
     var duration = s.end - s.start;
@@ -1643,6 +1656,9 @@
   }
 
   function playSentence(i) {
+    console.log("[playSentence] i=" + i + " | _isMobile=" + _isMobile() + " | _wa.active=" + _wa.active +
+      " | _wa.buf=" + !!_wa.buf + " | _wa._initPromise=" + !!_wa._initPromise +
+      " | audioBlob=" + !!state.audioBlob);
     if (i < 0 || i >= state.sentences.length) return;
     const s = state.sentences[i];
     state.lastIndex = i;
