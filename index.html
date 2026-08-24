@@ -139,6 +139,9 @@
 
   audio { width: 100%; margin: 0; border-radius: var(--radius); }
   .player-sticky {
+    padding: 4px 0 2px;
+  }
+  .sticky-header {
     position: sticky;
     top: 0;
     z-index: 100;
@@ -147,10 +150,10 @@
       radial-gradient(760px 500px at 95% 4%, rgba(99,102,241,0.07), transparent 55%),
       linear-gradient(175deg, #f0f2f6 0%, #f5f7fa 40%, #eef1f5 100%);
     background-attachment: fixed;
-    padding: 8px 4px 10px;
+    padding: 10px 8px 8px;
     margin-bottom: 4px;
-    box-shadow: 0 2px 12px rgba(0,0,0,.06);
     border-radius: var(--radius);
+    box-shadow: 0 2px 12px rgba(0,0,0,.06);
   }
 
   #dropzone {
@@ -521,6 +524,7 @@
     <p class="sub">点哪句就从哪句开始播，播完自动停 —— 专为英语听力跟读设计</p>
   </header>
 
+  <div class="sticky-header">
   <div class="toolbar">
     <div class="group">
       <span class="lbl">语速</span>
@@ -539,6 +543,7 @@
       <button id="btn-edit" aria-pressed="false" aria-label="编辑分段">✎ 编辑分段</button>
       <button id="btn-reset" class="btn-ghost">重置进度</button>
     </div>
+  </div>
   </div>
 
   <div class="editbar hidden" id="editbar">
