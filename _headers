@@ -1,18 +1,24 @@
 # Cloudflare Pages 部署配置：正确 MIME + 缓存策略
-# sw.js 永不缓存（保证更新立即生效）
+# 原则：页面与脚本永远取最新（no-cache 自动重验），只有内容不可变的资源才长缓存
+
+# 默认：所有资源都走「重验」——新部署立即生效，无需手动清缓存
+/*
+  Cache-Control: no-cache
+
+# sw.js 永不缓存（保证更新立即生效，浏览器每次都拉最新 SW）
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
 
-# sync.js 短缓存（方便改 key 后立即生效）
+# sync.js 不缓存（方便改逻辑后立即生效）
 /sync.js
   Cache-Control: no-cache
-
-# 静态资源（图标/音频）长缓存
-/*.png
-  Cache-Control: public, max-age=86400
-/*.mp3
-  Cache-Control: public, max-age=604800
 
 # manifest 不缓存（保证 PWA 更新及时）
 /manifest.json
   Cache-Control: no-cache
+
+# 静态资源（图标/音频）长缓存——这些内容不会变，更具体的规则会覆盖上面的默认 no-cache
+/*.png
+  Cache-Control: public, max-age=86400
+/*.mp3
+  Cache-Control: public, max-age=604800
