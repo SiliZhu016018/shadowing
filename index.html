@@ -834,12 +834,13 @@
     renderList();
     updateProgress();
     toast("已载入 " + state.sentences.length + " 句");
-    // 云端同步：上传当前材料（含音频）+ 记 lastMaterial
-    // ⚡ 延迟 3 秒执行：让用户先看到页面内容，不因上传阻塞感知速度
-    if (typeof syncUploadCurrentMaterial === "function") setTimeout(syncUploadCurrentMaterial, 3000);
-    // 打开材料后主动从云端同步一次生词（解决跨设备同步延迟 / 启动时序问题，确保能看到其他设备加的词）
+    // 云端同步：推迟到页面稳定后再执行（手机弱网环境下不抢带宽）
+    // ⚡ 延迟 5 秒上传 + 8 秒拉生词：用户先看到内容、先能播放
+    if (typeof syncUploadCurrentMaterial === "function") setTimeout(syncUploadCurrentMaterial, 5000);
     if (window.Sync && typeof Sync.pullVocabOnly === "function" && Sync.isAuthed() && state.materialId) {
-      Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
+      setTimeout(function () {
+        Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
+      }, 8000);
     }
     // ⚠️ 不在此处初始化 Web Audio 引擎：loadMaterial 可能在「非用户手势」时机被调用（如 sync 完成后自动加载），
     //    iOS 会静默忽略 AudioContext.resume()，导致 decodeAudioData 永久挂起。
@@ -1243,43 +1244,70 @@
   // ─────────────────────────────────────────────────────────────────────────────
   var _audioLoading = null; // 防止并发重复下载
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 音频加载：非阻塞式 —— 立即设 src 让 &lt;audio&gt; 可用，后台下载 blob 以升级到 WA 精确引擎
+  //
+  // 设计原则：
+  //   1. 页面秒开：设 audio.src = 远程 URL 后立刻返回，不阻塞渲染
+  //   2. 后台下载：fetch blob 带 3 次重试（指数退避），覆盖手机弱网/5G 不稳
+  //   3. 静默升级：blob 到达后自动切换 audio.src 为 blob URL + 移动端自动初始化 WA
+  //   4. 优雅降级：重试全失败时 &lt;audio&gt; 仍可播放（公开 URL 不过期），只是 iOS seek 不太准
+  // ─────────────────────────────────────────────────────────────────────────────
   function ensureLocalAudio(remoteUrl) {
-    // 已经是本地 blob URL / data URI / 空 → 无需转换，直接用
+    // 已经是本地 blob / data URI → 直接用
     if (!remoteUrl || remoteUrl.startsWith("blob:") || remoteUrl.startsWith("data:")) {
       if (remoteUrl) { audio.src = remoteUrl; state.audioUrl = remoteUrl; }
       return Promise.resolve(remoteUrl);
     }
-    // 已在下载中 → 复用同一个 Promise
+    // 已在后台下载中 → 复用
     if (_audioLoading) return _audioLoading;
 
-    console.log("[ensureLocalAudio] 正在下载远程音频为本地 blob...");
-    toast("⏳ 正在下载音频（首次需要几秒）...");
+    // ✅ 第一步：立即设 src（页面秒开，&lt;audio&gt; 立即可播）
+    audio.src = remoteUrl;
+    state.audioUrl = remoteUrl;
 
-    _audioLoading = fetch(remoteUrl).then(function (res) {
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      return res.blob();
-    }).then(function (blob) {
-      // 释放旧的 ObjectURL（防止内存泄漏）
-      if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
-        try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
+    // 第二步：后台下载 blob（成功后静默切换到精确模式）
+    _audioLoading = (function _tryFetch(attempt) {
+      if (attempt >= 3) {
+        _audioLoading = null;
+        console.warn("[ensureLocalAudio] 重试 3 次均失败，保持在线模式（音频仍可播放）");
+        return Promise.resolve(remoteUrl); // 不抛错——audio.src 已设，<audio> 可用
       }
-      var objUrl = URL.createObjectURL(blob);
-      state.audioBlob = blob;
-      state.audioUrl = objUrl;
-      audio.src = objUrl;
-      _audioLoading = null;
-      console.log("[ensureLocalAudio] ✓ 已下载, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
-      toast("✅ 音频已就绪");
-      return objUrl;
-    }).catch(function (err) {
-      _audioLoading = null;
-      console.warn("[ensureLocalAudio] 下载失败，回退直连:", err);
-      // 兜底：直接用远程 URL（seek 可能不准，但至少能播放）
-      audio.src = remoteUrl;
-      state.audioUrl = remoteUrl;
-      toast("⚠️ 音频使用在线模式（逐句定位可能不准）");
-      throw err; // 让调用方知道出了问题
-    });
+
+      var delay = attempt === 0 ? 0 : Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+
+      return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
+        return fetch(remoteUrl);
+      }).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.blob();
+      }).then(function (blob) {
+        // ✅ 释放旧 blob URL
+        if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
+          try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
+        }
+        var objUrl = URL.createObjectURL(blob);
+        state.audioBlob = blob;
+        state.audioUrl = objUrl;
+        audio.src = objUrl; // 静默切换：用户无感知
+        _audioLoading = null;
+        console.log("[ensureLocalAudio] ✓ blob 已就绪, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
+
+        // 移动端：blob 到达后自动初始化 WA 精确引擎（用户下次点击即走采样级定位）
+        if (_isMobile() && !_wa.active && !_wa._initPromise) {
+          console.log("[ensureLocalAudio] blob 就绪，自动初始化 WA 引擎...");
+          _waInit(state.audioBlob).catch(function (e) {
+            console.warn("[ensureLocalAudio] WA 自动初始化失败:", e);
+          });
+        }
+
+        return objUrl;
+      }).catch(function (err) {
+        console.warn("[ensureLocalAudio] 第", attempt + 1, "/3 次失败:", err.message || err);
+        return _tryFetch(attempt + 1);
+      });
+    })(0);
+
     return _audioLoading;
   }
   // 挂到 window：确保模块脚本（<script type="module">）也能调用
@@ -1710,32 +1738,32 @@
     if (i < 0 || i >= state.sentences.length) return;
     const s = state.sentences[i];
     state.lastIndex = i;
-    // ── iOS / 移动端：使用 Web Audio API 精确引擎（绕开 <audio>.currentTime 的 seek 硬伤）──
+    // ── iOS / 移动端：优先 Web Audio API 精确引擎，降级 &lt;audio&gt; ──
     if (_isMobile()) {
       audio.playbackRate = state.rate; // 同步 rate（UI 显示用）
+      // ✅ 最佳路径：WA 引擎已就绪（blob 已解码）
       if (_wa.active && _wa.buf) {
         return _waPlaySentence(i);
       }
-      // ⚠️ 只有本地 blob 才走 WA 引擎（内部需 fetch/decode 二进制数据）。
-      //    若 ensureLocalAudio 的后台 fetch 失败（手机端 Safari 对 Supabase 签名 URL 的 CORS 限制），
-      //    audioBlob 为空 → 不可传远程 URL 给 _waInit（它内部也会 fetch 同样失败）。
-      //    此时直接走 <audio> 模式：audio.src 已设为远程 URL（ensureLocalAudio 先直连），可正常播放。
+      // ✅ blob 已下载但 WA 尚未初始化 → 触发初始化
       if (state.audioBlob && !_wa._initPromise) {
-        toast("⏳ 正在准备精确播放引擎（首次约数秒）...");
         _waInit(state.audioBlob).then(function () {
           _waPlaySentence(i);
         }).catch(function (e) {
-          console.warn("[WA] 初始化失败，本次回退 <audio>:", e);
+          console.warn("[WA] 初始化失败，回退 <audio>:", e);
           _wa.active = false;
-          // 重置 initPromise：让后续点击可以重试（不卡在已拒绝的 Promise 上）
           _wa._initPromise = null;
-          // ⚠️ iOS 上 <audio> 的 currentTime seek 是硬件级坏掉的（点 N 播 N-1），
-          //    所以这里回退只是「兜底」——若出现错位，说明 WA 仍未就绪，需重试。
-          if (_isMobile()) {
-            toast("⚠️ 精确引擎本次未就绪，已用兼容模式（定位可能差一句）");
-          }
           _playSentenceByAudio(i);
         });
+        return;
+      }
+      // ✅ blob 还在后台下载中（或重试中）→ 先用 <audio> 播，blob 到达后自动升级到 WA
+      if (state.audioUrl && !_wa._initPromise) {
+        // 确保后台下载已在进行（若尚未开始则触发）
+        if (!_audioLoading && state.audioUrl && !state.audioUrl.startsWith("blob:")) {
+          ensureLocalAudio(state.audioUrl).catch(function () {});
+        }
+        _playSentenceByAudio(i);
         return;
       }
       // 正在初始化中（_wa._initPromise 存在且未拒绝）：等它完成会自动播放当前句
@@ -3385,6 +3413,12 @@ document.getElementById("mk-run").addEventListener("click", async function () {
     if (mkAudioEl._pendingFile) audF = mkAudioEl._pendingFile;
   }
 
+  // ⚡ 移动端不跑 Whisper：生成材料改为电脑端操作，手机仅跟读（避免下载 75MB 模型 + 手机推理卡死/失败）
+  if (typeof _isMobile === "function" ? _isMobile() : /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    window.toast("生成材料请在电脑端操作，手机端仅支持跟读已生成的材料");
+    return;
+  }
+
   if (!audF) { window.toast("请选择 MP3 音频文件"); return; }
 
   BTN_RUN.disabled = true;
@@ -3673,21 +3707,17 @@ window.onSyncSignedIn = function () {
 // Sync 就绪后补拉当前材料的云端音频（解决页面加载时序竞态）
 function ensureCloudAudio() {
   if (!state.materialId || !state.sentences || !state.sentences.length) return;
-  if (audio.src && state.audioUrl) return; // 已有音频，不需要
+  if (state.audioUrl) return; // 已有音频源（无论 blob 还是远程 URL）
   var ap = state._pendingAudioPath || (state.meta && state.meta.audioPath) || null;
   if (ap && window.Sync && Sync.isAuthed()) {
     console.log("[ensureCloudAudio] 补拉音频:", ap);
     state._pendingAudioPath = null;
     Sync.audioUrl(ap).then(function (url) {
-      if (!url) { console.warn("[ensureCloudAudio] 签名 URL 为空"); return; }
-      // 转本地 blob（同上：iOS 远程 URL seek 不可靠）
-      window.ensureLocalAudio(url).then(function () {
-        var infoEl = document.querySelector(".player-info");
-        if (infoEl) infoEl.textContent = "";
-      }).catch(function () {});
+      if (!url) { console.warn("[ensureCloudAudio] URL 为空"); return; }
+      // 非阻塞：立即设 src + 后台下载 blob
+      window.ensureLocalAudio(url).catch(function () {});
     }).catch(function (e) { console.warn("[ensureCloudAudio] 失败", e); });
   } else if (ap) {
-    // 有 audioPath 但还没登录：等登录后再试
     console.log("[ensureCloudAudio] 有 audioPath 但未登录，等待:", ap);
   }
 }
