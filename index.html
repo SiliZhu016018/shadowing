@@ -1169,12 +1169,25 @@
   }
 
   // ---------- 播放控制 ----------
+  // 自动滚动守卫：用户手动滚动/触摸后，临时抑制「播放跟随滚动」，避免跟用户抢滚动。
+  // 仅影响 highlight() 内的 scrollIntoView，绝不触碰播放逻辑、_wa 引擎或 timeupdate。
+  let _autoScrollSuppressedUntil = 0;
+  function _markUserScroll() { _autoScrollSuppressedUntil = Date.now() + 2500; }
+  window.addEventListener("wheel", _markUserScroll, { passive: true });
+  window.addEventListener("touchstart", _markUserScroll, { passive: true });
+  window.addEventListener("keydown", function (e) {
+    // 仅对纯滚动方向键生效；Space/Enter 留给既有播放快捷键，不在此抑制
+    if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].indexOf(e.key) !== -1) _markUserScroll();
+  }, true);
+
   function highlight(i) {
     const rows = listEl.children;
     for (let r = 0; r < rows.length; r++) rows[r].classList.remove("current");
     if (i == null || !rows[i]) return;
     rows[i].classList.add("current");
-    rows[i].scrollIntoView({ block: "center", behavior: "smooth" });
+    if (Date.now() >= _autoScrollSuppressedUntil) {
+      rows[i].scrollIntoView({ block: "center", behavior: "smooth" });
+    }
   }
 
   // 同步每句的播放图标：当前播放中显示 ⏸，其他显示 ▶
