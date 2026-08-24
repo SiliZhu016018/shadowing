@@ -843,19 +843,13 @@
       // 点击播放图标：当前句 → 暂停/继续；其他句 → 播放该句
       ico.addEventListener("click", function (e) {
         e.stopPropagation();
-        // ✅ WA 模式：用 _waPause/_waResume 而非 audio.pause/play
+        // 当前正在播这句 → 切换暂停/继续（WA 模式用 _waPause/_waResume）
         if (_wa.active) {
-          if (_wa.playing) { _waPause(); return; }
-          if (_wa.pausedAt != null) { _waResume(); return; }
-          // 不在播也不在暂停状态 → 直接播放该句
-          playSentence(i);
-          return;
+          if (state.playingIndex === i && _wa.playing) { _waPause(); return; }
+          if (state.playingIndex === i && _wa.pausedAt != null) { _waResume(); return; }
         }
-        if (state.playingIndex === i && !audio.paused) {
-          audio.pause();
-        } else {
-          playSentence(i);
-        }
+        // 其他情况：播放点击的那一句
+        playSentence(i);
       });
       txt.appendChild(ico);
       // 生词高亮：把文本里匹配的 vocab 词包成 span（不破坏播放图标）
@@ -1396,9 +1390,8 @@
 
     // 停止上一个 source node
     _waStop();
-    // ✅ 安全网：确保 <audio> 完全静默（防止 iOS 上 <audio> 和 WA 同时响 / 解锁残留播放）
+    // ✅ 安全网：确保 <audio> 静默（防止 iOS 上 <audio> 和 WA 同时响）
     if (!audio.paused) audio.pause();
-    audio.currentTime = 0;
 
     var offset = s.start;
     var duration = s.end - s.start;
