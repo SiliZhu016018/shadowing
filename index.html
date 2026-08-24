@@ -774,14 +774,14 @@
     // 音频源优先级：云端签名 URL（跨设备最稳）＞ 本地 objectURL/blob
     var audioPath = (audioSrc && audioSrc.path) || (state.meta && state.meta.audioPath) || null;
     if (audioPath && window.Sync && Sync.isAuthed()) {
-      // Sync 已就绪：直接获取签名 URL
+      // Sync 已就绪：获取签名 URL → 转本地 blob（iOS Safari 远程 URL seek 不可靠）
       Sync.audioUrl(audioPath).then(function (url) {
-        if (url) { audio.src = url; state.audioUrl = url; }
-        else if (audioSrc && audioSrc.url) { audio.src = audioSrc.url; state.audioUrl = audioSrc.url; }
+        if (url) ensureLocalAudio(url).catch(function () {});
+        else if (audioSrc && audioSrc.url) ensureLocalAudio(audioSrc.url).catch(function () {});
         else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
       }).catch(function (e) {
         console.warn("[audioUrl] 获取失败，回退本地", e);
-        if (audioSrc && audioSrc.url) { audio.src = audioSrc.url; state.audioUrl = audioSrc.url; }
+        if (audioSrc && audioSrc.url) ensureLocalAudio(audioSrc.url).catch(function () {});
         else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
       });
     } else if (audioPath && window.Sync) {
@@ -794,8 +794,7 @@
       state._pendingAudioPath = audioPath;
       state._pendingMaterialId = state.materialId;
     } else if (audioSrc && audioSrc.url) {
-      audio.src = audioSrc.url;
-      state.audioUrl = audioSrc.url;
+      ensureLocalAudio(audioSrc.url).catch(function () {});
     } else {
       audio.removeAttribute("src");
       audio.load();
@@ -1156,6 +1155,59 @@
   // 精确 seek 后播放：先等浏览器真的把播放位置移动到 target，再 play()。
   // 关键修复：iOS Safari 在「设置 currentTime 后立即 play」时会从旧位置开始播，
   // 导致逐句播放越播越偏（刷新后第一句正确、之后漂移）。等 seeked 事件可根除该问题。
+  // ─────────────────────────────────────────────────────────────────────────────
+  // iOS Safari 远程音频 → 本地 blob 转换器
+  //
+  // iOS Safari 对远程流媒体 URL（Supabase 签名 URL 等）的 currentTime seek 有已知硬伤：
+  //   浏览器内部用 HTTP Range Request 做 seek，但签名 URL 的 Range 响应经常不正确，
+  //   导致「设了 currentTime 但播放位置根本没变」→ 逐句点播时每句都从上句结尾开始。
+  //
+  // 解决方案：把远程 URL 先 fetch 为完整 blob，再 createObjectURL 赋给 <audio>。
+  //   本地 blob 的 seek 在所有浏览器（含 iOS Safari）上都精确可靠。
+  //   blob 存入 state.audioBlob，同步上传时也能复用（不用重新下载）。
+  // ─────────────────────────────────────────────────────────────────────────────
+  var _audioLoading = null; // 防止并发重复下载
+
+  function ensureLocalAudio(remoteUrl) {
+    // 已经是本地 blob URL / data URI / 空 → 无需转换，直接用
+    if (!remoteUrl || remoteUrl.startsWith("blob:") || remoteUrl.startsWith("data:")) {
+      if (remoteUrl) { audio.src = remoteUrl; state.audioUrl = remoteUrl; }
+      return Promise.resolve(remoteUrl);
+    }
+    // 已在下载中 → 复用同一个 Promise
+    if (_audioLoading) return _audioLoading;
+
+    console.log("[ensureLocalAudio] 正在下载远程音频为本地 blob...");
+    toast("⏳ 正在下载音频（首次需要几秒）...");
+
+    _audioLoading = fetch(remoteUrl).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.blob();
+    }).then(function (blob) {
+      // 释放旧的 ObjectURL（防止内存泄漏）
+      if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
+        try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
+      }
+      var objUrl = URL.createObjectURL(blob);
+      state.audioBlob = blob;
+      state.audioUrl = objUrl;
+      audio.src = objUrl;
+      _audioLoading = null;
+      console.log("[ensureLocalAudio] ✓ 已下载, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
+      toast("✅ 音频已就绪");
+      return objUrl;
+    }).catch(function (err) {
+      _audioLoading = null;
+      console.warn("[ensureLocalAudio] 下载失败，回退直连:", err);
+      // 兜底：直接用远程 URL（seek 可能不准，但至少能播放）
+      audio.src = remoteUrl;
+      state.audioUrl = remoteUrl;
+      toast("⚠️ 音频使用在线模式（逐句定位可能不准）");
+      throw err; // 让调用方知道出了问题
+    });
+    return _audioLoading;
+  }
+
   function seekAndPlay(target, onReady) {
     // ✅ 关键：每次 seek 前先暂停。iOS Safari 在「播放中」seek 落点会漂移且逐句累积，
     //    这正是「第一句对、顺着点后面越播越偏、刷新又对了」的根因。暂停后再 seek 才精确。
@@ -2999,13 +3051,14 @@ function tryFetchCloudAudio(materialId) {
     if (!m.audioPath) { toast("该材料暂无云端音频（需在电脑端重新上传原始音频）"); return; }
     return Sync.audioUrl(m.audioPath).then(function (url) {
       if (!url) { toast("获取音频地址失败，请重试"); return; }
-      audio.src = url;
-      state.audioUrl = url;
-      if (state.materialId === materialId && state.sentences && state.sentences.length) {
-        var infoEl2 = document.querySelector(".player-info");
-        if (infoEl2) infoEl2.textContent = "";
-        toast("✅ 音频已加载，可以播放了");
-      }
+      // 转本地 blob：iOS Safari 远程 URL 的 seek 不可靠，必须下载为本地文件
+      return ensureLocalAudio(url).then(function () {
+        if (state.materialId === materialId && state.sentences && state.sentences.length) {
+          var infoEl2 = document.querySelector(".player-info");
+          if (infoEl2) infoEl2.textContent = "";
+          // toast 已在 ensureLocalAudio 里弹了"✅ 音频已就绪"，这里不重复弹
+        }
+      });
     });
   }).catch(function (err) {
     console.warn("[tryFetchCloudAudio] 失败", materialId, err);
@@ -3090,11 +3143,11 @@ function ensureCloudAudio() {
     state._pendingAudioPath = null;
     Sync.audioUrl(ap).then(function (url) {
       if (!url) { console.warn("[ensureCloudAudio] 签名 URL 为空"); return; }
-      audio.src = url;
-      state.audioUrl = url;
-      toast("✅ 音频已加载");
-      var infoEl = document.querySelector(".player-info");
-      if (infoEl) infoEl.textContent = "";
+      // 转本地 blob（同上：iOS 远程 URL seek 不可靠）
+      ensureLocalAudio(url).then(function () {
+        var infoEl = document.querySelector(".player-info");
+        if (infoEl) infoEl.textContent = "";
+      }).catch(function () {});
     }).catch(function (e) { console.warn("[ensureCloudAudio] 失败", e); });
   } else if (ap) {
     // 有 audioPath 但还没登录：等登录后再试
@@ -3129,7 +3182,7 @@ function syncPullCurrentMaterial() {
     var curPath = state.meta && state.meta.audioPath;
     if (m.audioPath && m.audioPath !== curPath && (!audio.src)) {
       Sync.audioUrl(m.audioPath).then(function (url) {
-        if (url) { audio.src = url; state.audioUrl = url; state.meta.audioPath = m.audioPath; }
+        if (url) { ensureLocalAudio(url).catch(function () {}); state.meta.audioPath = m.audioPath; }
       });
       changed = true;
     }
