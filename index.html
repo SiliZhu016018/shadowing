@@ -1231,15 +1231,17 @@
   //   ⚡ 性能优化（v3）：先直连后下 blob —— 不再阻塞页面等整首 MP3 下载完。
   //   立即设 audio.src=远程URL → 浏览器立刻开始缓冲 + 显示时长 + 可播放；
   //   后台异步 fetch blob 供 Web Audio 引擎（iOS 精确 seek）和离线缓存使用。
-  //   用户感知从"等几秒白屏/00:00"变为"打开即有进度条"。
+  //   本地 blob 的 seek 在所有浏览器（含 iOS Safari）上都精确可靠。
+  //   blob 存入 state.audioBlob，同步上传时也能复用（不用重新下载）。
   //
-  //   ⚠️ 手机端 Safari 对跨域 Supabase 签名 URL 的 fetch 偶发 "Load failed"
-  //      （CORS/网络层限制），因此 fetch 带 2 次重试；全部失败时静默降级为
-  //      <audio> 直连远程 URL（可播放，仅 seek 精度略低），不影响核心功能。
+  //   ⚠️ 重要：此函数保持【阻塞式】——必须先 fetch 完 blob 再设 audio.src =
+  //      blobURL。原因：手机端 Safari 对 Supabase 签名 URL 的 fetch 偶发
+  //      "Load failed"（CORS 限制），但【阻塞等待】时网络状态往往能通过；
+  //      若改成"先设 src 再后台 fetch"（性能优化尝试），手机端 fetch 失败会导致
+  //      audioBlob 永远为空 → WA 引擎无法初始化 → 点句子不播放。
+  //      失败兜底：fetch 失败则用远程 URL 直连 <audio>（可播放，seek 精度略低）。
   // ─────────────────────────────────────────────────────────────────────────────
   var _audioLoading = null; // 防止并发重复下载
-  var _AUDIO_FETCH_RETRIES = 2; // fetch 失败重试次数
-  var _AUDIO_RETRY_DELAY = 800; // 重试间隔 ms
 
   function ensureLocalAudio(remoteUrl) {
     // 已经是本地 blob URL / data URI / 空 → 无需转换，直接用
@@ -1247,32 +1249,16 @@
       if (remoteUrl) { audio.src = remoteUrl; state.audioUrl = remoteUrl; }
       return Promise.resolve(remoteUrl);
     }
-    // 已在下载中 → 复用同一个 Promise（但 audio.src 已设过，不阻塞）
+    // 已在下载中 → 复用同一个 Promise
     if (_audioLoading) return _audioLoading;
 
-    // ⚡ 关键优化：立即设 src 为远程 URL，浏览器马上开始缓冲 + 加载 metadata（显示时长）
-    audio.src = remoteUrl;
-    state.audioUrl = remoteUrl;
+    console.log("[ensureLocalAudio] 正在下载远程音频为本地 blob...");
+    toast("⏳ 正在下载音频（首次需要几秒）...");
 
-    console.log("[ensureLocalAudio] 后台下载远程音频为本地 blob（不阻塞播放）...");
-
-    // 带重试的 fetch：手机端 Safari 对 Supabase 签名 URL 的 fetch 偶发 Load failed
-    function attemptFetch(remaining) {
-      return fetch(remoteUrl).then(function (res) {
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.blob();
-      }).catch(function (err) {
-        if (remaining > 0) {
-          console.warn("[ensureLocalAudio] fetch 失败（剩余重试 " + remaining + "）:", err && err.message);
-          return new Promise(function (resolve) {
-            setTimeout(function () { resolve(attemptFetch(remaining - 1)); }, _AUDIO_RETRY_DELAY);
-          });
-        }
-        throw err; // 重试耗尽，抛出给外层 catch 降级
-      });
-    }
-
-    _audioLoading = attemptFetch(_AUDIO_FETCH_RETRIES).then(function (blob) {
+    _audioLoading = fetch(remoteUrl).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.blob();
+    }).then(function (blob) {
       // 释放旧的 ObjectURL（防止内存泄漏）
       if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
         try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
@@ -1280,19 +1266,19 @@
       var objUrl = URL.createObjectURL(blob);
       state.audioBlob = blob;
       state.audioUrl = objUrl;
-      // 无缝切换到 blob URL：若当前没在播放，静默切换；若正在播，浏览器会平滑接管
       audio.src = objUrl;
       _audioLoading = null;
-      console.log("[ensureLocalAudio] ✓ blob 就绪, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
+      console.log("[ensureLocalAudio] ✓ 已下载, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
+      toast("✅ 音频已就绪");
       return objUrl;
     }).catch(function (err) {
       _audioLoading = null;
-      console.warn("[ensureLocalAudio] 全部重试失败，继续使用在线模式:", err && err.message);
-      // 降级：<audio> 已设为远程 URL（上面第一时间设的），仍可正常播放
-      // 仅 iOS WA 引擎的精确 seek 不可用（回退 <audio> 模式）
+      console.warn("[ensureLocalAudio] 下载失败，回退直连:", err);
+      // 兜底：直接用远程 URL（seek 可能不准，但至少能播放）
+      audio.src = remoteUrl;
       state.audioUrl = remoteUrl;
-      state.audioBlob = null; // 明确清空，让 playSentence 走 <audio> 路径而非卡在 WA 初始化
-      return remoteUrl;
+      toast("⚠️ 音频使用在线模式（逐句定位可能不准）");
+      throw err; // 让调用方知道出了问题
     });
     return _audioLoading;
   }
@@ -1743,6 +1729,11 @@
           _wa.active = false;
           // 重置 initPromise：让后续点击可以重试（不卡在已拒绝的 Promise 上）
           _wa._initPromise = null;
+          // ⚠️ iOS 上 <audio> 的 currentTime seek 是硬件级坏掉的（点 N 播 N-1），
+          //    所以这里回退只是「兜底」——若出现错位，说明 WA 仍未就绪，需重试。
+          if (_isMobile()) {
+            toast("⚠️ 精确引擎本次未就绪，已用兼容模式（定位可能差一句）");
+          }
           _playSentenceByAudio(i);
         });
         return;
