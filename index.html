@@ -205,6 +205,10 @@
   }
   .row:hover .txt .play-ico,
   .row.current .txt .play-ico { opacity: 1; }
+  /* 触屏设备无 hover：让每句播放图标始终全亮，消除「忽隐忽现」的不齐感 */
+  @media (hover: none) {
+    .row .txt .play-ico { opacity: 1; }
+  }
   .row .txt .play-ico:hover { transform: scale(1.25); }
   .row .txt-ref { font-size: 12px; color: var(--muted); margin-top: 4px; padding-left: 22px; line-height: 1.4; }
 
