@@ -489,6 +489,7 @@ const Sync = {
         word: r.word, note: r.note, example: r.example,
         srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
         level: r.level, reps: r.reps, due: r.due,
+        ef: r.ef, interval: r.interval,
         lastReview: r.last_review, lastGrade: r.last_grade,
         createdAt: r.created_at, updatedAt: r.updated_at,
       };

@@ -835,7 +835,8 @@
     updateProgress();
     toast("已载入 " + state.sentences.length + " 句");
     // 云端同步：上传当前材料（含音频）+ 记 lastMaterial
-    if (typeof syncUploadCurrentMaterial === "function") syncUploadCurrentMaterial();
+    // ⚡ 延迟 3 秒执行：让用户先看到页面内容，不因上传阻塞感知速度
+    if (typeof syncUploadCurrentMaterial === "function") setTimeout(syncUploadCurrentMaterial, 3000);
     // 打开材料后主动从云端同步一次生词（解决跨设备同步延迟 / 启动时序问题，确保能看到其他设备加的词）
     if (window.Sync && typeof Sync.pullVocabOnly === "function" && Sync.isAuthed() && state.materialId) {
       Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
@@ -1226,8 +1227,19 @@
   // 解决方案：把远程 URL 先 fetch 为完整 blob，再 createObjectURL 赋给 <audio>。
   //   本地 blob 的 seek 在所有浏览器（含 iOS Safari）上都精确可靠。
   //   blob 存入 state.audioBlob，同步上传时也能复用（不用重新下载）。
+  //
+  //   ⚡ 性能优化（v3）：先直连后下 blob —— 不再阻塞页面等整首 MP3 下载完。
+  //   立即设 audio.src=远程URL → 浏览器立刻开始缓冲 + 显示时长 + 可播放；
+  //   后台异步 fetch blob 供 Web Audio 引擎（iOS 精确 seek）和离线缓存使用。
+  //   用户感知从"等几秒白屏/00:00"变为"打开即有进度条"。
+  //
+  //   ⚠️ 手机端 Safari 对跨域 Supabase 签名 URL 的 fetch 偶发 "Load failed"
+  //      （CORS/网络层限制），因此 fetch 带 2 次重试；全部失败时静默降级为
+  //      <audio> 直连远程 URL（可播放，仅 seek 精度略低），不影响核心功能。
   // ─────────────────────────────────────────────────────────────────────────────
   var _audioLoading = null; // 防止并发重复下载
+  var _AUDIO_FETCH_RETRIES = 2; // fetch 失败重试次数
+  var _AUDIO_RETRY_DELAY = 800; // 重试间隔 ms
 
   function ensureLocalAudio(remoteUrl) {
     // 已经是本地 blob URL / data URI / 空 → 无需转换，直接用
@@ -1235,16 +1247,32 @@
       if (remoteUrl) { audio.src = remoteUrl; state.audioUrl = remoteUrl; }
       return Promise.resolve(remoteUrl);
     }
-    // 已在下载中 → 复用同一个 Promise
+    // 已在下载中 → 复用同一个 Promise（但 audio.src 已设过，不阻塞）
     if (_audioLoading) return _audioLoading;
 
-    console.log("[ensureLocalAudio] 正在下载远程音频为本地 blob...");
-    toast("⏳ 正在下载音频（首次需要几秒）...");
+    // ⚡ 关键优化：立即设 src 为远程 URL，浏览器马上开始缓冲 + 加载 metadata（显示时长）
+    audio.src = remoteUrl;
+    state.audioUrl = remoteUrl;
 
-    _audioLoading = fetch(remoteUrl).then(function (res) {
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      return res.blob();
-    }).then(function (blob) {
+    console.log("[ensureLocalAudio] 后台下载远程音频为本地 blob（不阻塞播放）...");
+
+    // 带重试的 fetch：手机端 Safari 对 Supabase 签名 URL 的 fetch 偶发 Load failed
+    function attemptFetch(remaining) {
+      return fetch(remoteUrl).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.blob();
+      }).catch(function (err) {
+        if (remaining > 0) {
+          console.warn("[ensureLocalAudio] fetch 失败（剩余重试 " + remaining + "）:", err && err.message);
+          return new Promise(function (resolve) {
+            setTimeout(function () { resolve(attemptFetch(remaining - 1)); }, _AUDIO_RETRY_DELAY);
+          });
+        }
+        throw err; // 重试耗尽，抛出给外层 catch 降级
+      });
+    }
+
+    _audioLoading = attemptFetch(_AUDIO_FETCH_RETRIES).then(function (blob) {
       // 释放旧的 ObjectURL（防止内存泄漏）
       if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
         try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
@@ -1252,22 +1280,19 @@
       var objUrl = URL.createObjectURL(blob);
       state.audioBlob = blob;
       state.audioUrl = objUrl;
+      // 无缝切换到 blob URL：若当前没在播放，静默切换；若正在播，浏览器会平滑接管
       audio.src = objUrl;
       _audioLoading = null;
-      console.log("[ensureLocalAudio] ✓ 已下载, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
-      // ⚠️ 不在此处初始化 Web Audio 引擎：本函数常在「非用户手势」时机被调用，
-      //    iOS 会静默忽略 AudioContext.resume()，导致 decodeAudioData 永久挂起。
-      //    WA 引擎改为在「第一次点句子播放」（用户手势内）才初始化（见 playSentence）。
-      toast("✅ 音频已就绪");
+      console.log("[ensureLocalAudio] ✓ blob 就绪, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
       return objUrl;
     }).catch(function (err) {
       _audioLoading = null;
-      console.warn("[ensureLocalAudio] 下载失败，回退直连:", err);
-      // 兜底：直接用远程 URL（seek 可能不准，但至少能播放）
-      audio.src = remoteUrl;
+      console.warn("[ensureLocalAudio] 全部重试失败，继续使用在线模式:", err && err.message);
+      // 降级：<audio> 已设为远程 URL（上面第一时间设的），仍可正常播放
+      // 仅 iOS WA 引擎的精确 seek 不可用（回退 <audio> 模式）
       state.audioUrl = remoteUrl;
-      toast("⚠️ 音频使用在线模式（逐句定位可能不准）");
-      throw err; // 让调用方知道出了问题
+      state.audioBlob = null; // 明确清空，让 playSentence 走 <audio> 路径而非卡在 WA 初始化
+      return remoteUrl;
     });
     return _audioLoading;
   }
@@ -1706,9 +1731,11 @@
         return _waPlaySentence(i);
       }
       // 引擎未就绪：本次点击即用户手势，正好用于初始化 AudioContext
-      if (state.audioBlob && !_wa._initPromise) {
+      // ⚡ 优先用本地 blob（无网络开销）；blob 未就绪时传远程 URL 让 _waInit 自己 fetch
+      var waSource = state.audioBlob || (state.audioUrl && !state.audioUrl.startsWith("blob:") ? state.audioUrl : null);
+      if (waSource && !_wa._initPromise) {
         toast("⏳ 正在准备精确播放引擎（首次约数秒）...");
-        _waInit(state.audioBlob).then(function () {
+        _waInit(waSource).then(function () {
           _waPlaySentence(i);
         }).catch(function (e) {
           console.warn("[WA] 初始化失败，本次回退 <audio>:", e);
