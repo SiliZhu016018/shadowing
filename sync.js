@@ -166,12 +166,11 @@ const Sync = {
     return data; // data 已是 Blob
   },
 
-  // 生成音频 URL（带签名，1 小时有效）
+  // 生成音频 URL（公开桶，不过期、CORS 稳定）
   async audioUrl(audioPath) {
     const c = await _loadClient(); if (!c || !_user) return null;
-    const { data, error } = await c.storage.from("audio").createSignedUrl(audioPath, 3600);
-    if (error) throw error;
-    return data ? data.signedUrl : null;
+    const { data } = c.storage.from("audio").getPublicUrl(audioPath);
+    return data ? data.publicUrl : null;
   },
 
   // 上传/更新一个材料（含音频 blob）
