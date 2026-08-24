@@ -776,12 +776,12 @@
     if (audioPath && window.Sync && Sync.isAuthed()) {
       // Sync 已就绪：获取签名 URL → 转本地 blob（iOS Safari 远程 URL seek 不可靠）
       Sync.audioUrl(audioPath).then(function (url) {
-        if (url) ensureLocalAudio(url).catch(function () {});
-        else if (audioSrc && audioSrc.url) ensureLocalAudio(audioSrc.url).catch(function () {});
+        if (url) window.ensureLocalAudio(url).catch(function () {});
+        else if (audioSrc && audioSrc.url) window.ensureLocalAudio(audioSrc.url).catch(function () {});
         else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
       }).catch(function (e) {
         console.warn("[audioUrl] 获取失败，回退本地", e);
-        if (audioSrc && audioSrc.url) ensureLocalAudio(audioSrc.url).catch(function () {});
+        if (audioSrc && audioSrc.url) window.ensureLocalAudio(audioSrc.url).catch(function () {});
         else { audio.removeAttribute("src"); audio.load(); state.audioUrl = null; }
       });
     } else if (audioPath && window.Sync) {
@@ -794,7 +794,7 @@
       state._pendingAudioPath = audioPath;
       state._pendingMaterialId = state.materialId;
     } else if (audioSrc && audioSrc.url) {
-      ensureLocalAudio(audioSrc.url).catch(function () {});
+      window.ensureLocalAudio(audioSrc.url).catch(function () {});
     } else {
       audio.removeAttribute("src");
       audio.load();
@@ -1207,6 +1207,9 @@
     });
     return _audioLoading;
   }
+  // 挂到 window：确保模块脚本（<script type="module">）也能调用
+  // 模块脚本有独立作用域，无法直接访问普通脚本里的函数
+  window.ensureLocalAudio = ensureLocalAudio;
 
   function seekAndPlay(target, onReady) {
     // ✅ 关键：每次 seek 前先暂停。iOS Safari 在「播放中」seek 落点会漂移且逐句累积，
@@ -3052,7 +3055,7 @@ function tryFetchCloudAudio(materialId) {
     return Sync.audioUrl(m.audioPath).then(function (url) {
       if (!url) { toast("获取音频地址失败，请重试"); return; }
       // 转本地 blob：iOS Safari 远程 URL 的 seek 不可靠，必须下载为本地文件
-      return ensureLocalAudio(url).then(function () {
+      return window.ensureLocalAudio(url).then(function () {
         if (state.materialId === materialId && state.sentences && state.sentences.length) {
           var infoEl2 = document.querySelector(".player-info");
           if (infoEl2) infoEl2.textContent = "";
@@ -3144,7 +3147,7 @@ function ensureCloudAudio() {
     Sync.audioUrl(ap).then(function (url) {
       if (!url) { console.warn("[ensureCloudAudio] 签名 URL 为空"); return; }
       // 转本地 blob（同上：iOS 远程 URL seek 不可靠）
-      ensureLocalAudio(url).then(function () {
+      window.ensureLocalAudio(url).then(function () {
         var infoEl = document.querySelector(".player-info");
         if (infoEl) infoEl.textContent = "";
       }).catch(function () {});
@@ -3182,7 +3185,7 @@ function syncPullCurrentMaterial() {
     var curPath = state.meta && state.meta.audioPath;
     if (m.audioPath && m.audioPath !== curPath && (!audio.src)) {
       Sync.audioUrl(m.audioPath).then(function (url) {
-        if (url) { ensureLocalAudio(url).catch(function () {}); state.meta.audioPath = m.audioPath; }
+        if (url) { window.ensureLocalAudio(url).catch(function () {}); state.meta.audioPath = m.audioPath; }
       });
       changed = true;
     }
