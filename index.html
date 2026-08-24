@@ -1730,22 +1730,25 @@
       if (_wa.active && _wa.buf) {
         return _waPlaySentence(i);
       }
-      // 引擎未就绪：本次点击即用户手势，正好用于初始化 AudioContext
-      // ⚡ 优先用本地 blob（无网络开销）；blob 未就绪时传远程 URL 让 _waInit 自己 fetch
-      var waSource = state.audioBlob || (state.audioUrl && !state.audioUrl.startsWith("blob:") ? state.audioUrl : null);
-      if (waSource && !_wa._initPromise) {
+      // ⚠️ 只有本地 blob 才走 WA 引擎（内部需 fetch/decode 二进制数据）。
+      //    若 ensureLocalAudio 的后台 fetch 失败（手机端 Safari 对 Supabase 签名 URL 的 CORS 限制），
+      //    audioBlob 为空 → 不可传远程 URL 给 _waInit（它内部也会 fetch 同样失败）。
+      //    此时直接走 <audio> 模式：audio.src 已设为远程 URL（ensureLocalAudio 先直连），可正常播放。
+      if (state.audioBlob && !_wa._initPromise) {
         toast("⏳ 正在准备精确播放引擎（首次约数秒）...");
-        _waInit(waSource).then(function () {
+        _waInit(state.audioBlob).then(function () {
           _waPlaySentence(i);
         }).catch(function (e) {
           console.warn("[WA] 初始化失败，本次回退 <audio>:", e);
           _wa.active = false;
+          // 重置 initPromise：让后续点击可以重试（不卡在已拒绝的 Promise 上）
+          _wa._initPromise = null;
           _playSentenceByAudio(i);
         });
         return;
       }
-      // 正在初始化中（_wa._initPromise 存在）：等它完成会自动播放当前句
-      if (_wa._initPromise) {
+      // 正在初始化中（_wa._initPromise 存在且未拒绝）：等它完成会自动播放当前句
+      if (_wa._initPromise && _wa._initPromise.then) {
         _wa._initPromise.then(function () { _waPlaySentence(i); })
                         .catch(function () { _playSentenceByAudio(i); });
         return;
