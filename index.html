@@ -1195,15 +1195,20 @@
   }
 
   // 同步每句的播放图标：当前播放中显示 ⏸，其他显示 ▶
+  // 统一「当前是否正在出声」判定（取代散落在 syncPlayIcons / togglePlayPause / timeupdate 里的
+  // `_wa.active ? _wa.playing : !audio.paused` 多重判断，单一事实来源，避免补丁堆叠后逻辑漂移）
+  function isPlaybackActive() {
+    if (state.playingIndex == null) return false;
+    return _wa.active ? _wa.playing : !audio.paused;
+  }
+
   function syncPlayIcons() {
     const rows = listEl.children;
     const playingIdx = state.playingIndex;
     for (let r = 0; r < rows.length; r++) {
       const ico = rows[r].querySelector(".play-ico");
       if (!ico) continue;
-      // ✅ WA 模式用 _wa.playing 判断，<audio> 模式用 !audio.paused
-      const isPlaying = _wa.active ? (_wa.playing && r === playingIdx)
-                                     : (r === playingIdx && !audio.paused);
+      const isPlaying = isPlaybackActive() && r === playingIdx;
       ico.textContent = isPlaying ? "⏸" : "▶";
     }
   }
@@ -1523,6 +1528,7 @@
     _wa.src = null;
     _wa.playing = false;
     _waStopProgressMonitor();
+    syncPlayIcons();   // 暂停后让当前句图标翻回 ▶（补全「播放/暂停图标一致」）
     console.log("[WA] 暂停于", _wa.pausedAt.toFixed(3), "s");
   }
 
@@ -1808,9 +1814,8 @@
 
     // 停止点始终用「当前这句」的结束时间（严格按编辑分段，仅在末尾留 0.02s 余量）
     if (t >= cur.end - 0.02) {
-      // ✅ WA 模式下：<audio> 的自动进句/循环完全由 _waPlaySentence 的 onended 处理，
-      //   此处绝不能调 audio.play() / seekAndPlay，否则会在 WA 播放间隙触发 <audio> 全文播放
-      if (_wa.active) return;
+      // ✅ WA 模式下：<audio> 的自动进句/循环完全由 _waPlaySentence 的 onended 处理（入口处
+      //   `if (_wa.active) return;` 已拦截），此处只处理 <audio> 模式的停止/循环/连播。
       if (state.loop) {
         // 循环：同样先精确 seek 再续播，避免 iOS 循环点漂移
         seekAndPlay(cur.start, function () { const p = audio.play(); if (p && p.catch) p.catch(function () {}); });
@@ -1928,7 +1933,7 @@
   // 暂停 / 继续
   const btnToggle = document.getElementById("btn-toggle");
   function syncToggleLabel() {
-    const playing = !audio.paused && state.playingIndex != null;
+    const playing = isPlaybackActive();
     btnToggle.textContent = playing ? "⏸ 暂停" : "▶ 继续";
     syncPlayIcons();
   }
@@ -2190,16 +2195,21 @@
   }
   function vocabKey() { return lsKey("vocab"); }
 
-  // ---------- 艾宾浩斯遗忘曲线复习调度 ----------
-  // 复习间隔（分钟）：5分钟 → 30分钟 → 12小时 → 1天 → 2天 → 4天 → 7天 → 15天
-  var REVIEW_INTERVALS = [5, 30, 12 * 60, 24 * 60, 2 * 24 * 60, 4 * 24 * 60, 7 * 24 * 60, 15 * 24 * 60];
-  var MASTERED_MAINTAIN_MIN = 30 * 24 * 60; // 已掌握后的维护复习间隔（30 天）
-  var MIN_MS = 60000;
+  // ---------- SM-2 间隔重复复习调度（与 vocab.html 数据模型保持一致）----------
+  var DAY_MS = 86400000;
+  var SM2_EF_INIT = 2.5;        // 初始难度系数（easiness factor）
+  var SM2_EF_MIN = 1.3;         // 难度系数下限（SuperMemo 规定）
+  var SM2_MASTER_DAYS = 21;     // 间隔 ≥ 该天数视为「已掌握」
+  var SM2_FIRST = 1;            // 首次正确复习间隔（天）
+  var SM2_SECOND = 6;           // 第二次正确复习间隔（天）
 
-  // 旧数据兼容：补全复习字段（新词默认立即进入待复习队列）
+  // 旧数据兼容：补全 SM-2 字段（保留 level 以便老数据平滑迁移）
   function normalizeVocabItem(v) {
     if (v.level == null || isNaN(v.level)) v.level = 0;
     if (v.reps == null || isNaN(v.reps)) v.reps = 0;
+    if (v.ef == null || isNaN(v.ef)) v.ef = SM2_EF_INIT;
+    // 旧数据无 interval：曾「已掌握」(level≥8) 的保留掌握态，其余从 1 天起步由 SM-2 重建
+    if (v.interval == null || isNaN(v.interval)) v.interval = (v.level || 0) >= 8 ? SM2_MASTER_DAYS : 1;
     if (!v.createdAt) v.createdAt = new Date().toISOString();
     if (!v.due || isNaN(v.due)) v.due = Date.parse(v.createdAt) || Date.now();
     if (v.lastReview === undefined) v.lastReview = null;
@@ -2207,46 +2217,51 @@
     return v;
   }
   function isDue(v) { return (v.due || 0) <= Date.now(); }
-  function isMastered(v) { return (v.level || 0) >= REVIEW_INTERVALS.length; }
+  function isMastered(v) { return (v.interval || 0) >= SM2_MASTER_DAYS; }
   function dueVocab() { return state.vocab.filter(isDue); }
-  function intervalLabel(min) {
-    if (min < 60) return min + " 分钟";
-    if (min < 1440) return (min / 60) + " 小时";
-    return Math.round(min / 1440) + " 天";
-  }
   // 下次复习时间的人性化描述
   function nextDueLabel(v) {
     if (isDue(v)) return "待复习";
     var ms = (v.due || 0) - Date.now();
-    if (ms < 3600000) return Math.max(1, Math.round(ms / MIN_MS)) + " 分钟后";
-    if (ms < 86400000) return Math.max(1, Math.round(ms / 3600000)) + " 小时后";
-    return Math.max(1, Math.round(ms / 86400000)) + " 天后";
+    if (ms < 3600000) return Math.max(1, Math.round(ms / 60000)) + " 分钟后";
+    if (ms < DAY_MS) return Math.max(1, Math.round(ms / 3600000)) + " 小时后";
+    return Math.max(1, Math.round(ms / DAY_MS)) + " 天后";
   }
-  // 复习评分：'good' 进入下一阶段（间隔递增）；'again' 回到第一阶段并稍后重练
-  function scheduleWord(v, grade) {
+  // SM-2 核心：q = 回忆质量（0–5，<3 视为失败需重学）
+  function sm2Review(v, q) {
+    q = Math.max(0, Math.min(5, q | 0));
     var now = Date.now();
     v.lastReview = now;
-    if (grade === "good") {
-      v.reps = (v.reps || 0) + 1;
-      v.level = (v.level || 0) + 1;
-      var iv = v.level >= REVIEW_INTERVALS.length ? MASTERED_MAINTAIN_MIN : REVIEW_INTERVALS[v.level];
-      v.due = now + iv * MIN_MS;
-      v.lastGrade = "good";
-    } else {
-      v.level = 0;
+    if (q < 3) {
       v.reps = 0;
-      v.due = now + REVIEW_INTERVALS[0] * MIN_MS; // 5 分钟后重新进入队列
-      v.lastGrade = "again";
+      v.interval = SM2_FIRST;                 // 失败：次日重新学习
+    } else {
+      if (v.reps === 0) v.interval = SM2_FIRST;
+      else if (v.reps === 1) v.interval = SM2_SECOND;
+      else v.interval = Math.max(1, Math.round(v.interval * v.ef));
+      v.reps += 1;
     }
+    // 更新难度系数：回忆越轻松 ef 越高，越吃力 ef 越低（下限 1.3）
+    v.ef = v.ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+    if (v.ef < SM2_EF_MIN) v.ef = SM2_EF_MIN;
+    v.due = now + v.interval * DAY_MS;
+    v.lastGrade = q;
   }
-  // 词条复习状态徽章（文案 + 样式类）
+  function classify(v) {
+    if (isMastered(v)) return "mastered";
+    if (isDue(v)) return "due";
+    if ((v.reps || 0) >= 2) return "solid";
+    return "ok";
+  }
+  // 词条复习状态徽章（文案 + 样式类），与 vocab.html 的 classify 保持一致
   function vocabStatusChip(v, i) {
-    var cls, label;
-    if (isMastered(v)) { cls = "mastered"; label = "🌟 已掌握 · " + nextDueLabel(v); }
-    else if (isDue(v)) { cls = "due"; label = "🔴 待复习"; }
-    else if ((v.level || 0) >= 3) { cls = "solid"; label = "🟠 巩固中 · " + nextDueLabel(v); }
-    else { cls = "ok"; label = "🔵 第 " + (v.level + 1) + "/" + REVIEW_INTERVALS.length + " 阶 · " + nextDueLabel(v); }
-    return '<button class="vp-status ' + cls + '" data-rid="' + i + '" title="点击单独复习这个词">' + label + "</button>";
+    var cat = classify(v);
+    var label;
+    if (cat === "mastered") label = "🌟 已掌握 · " + nextDueLabel(v);
+    else if (cat === "due") label = "🔴 待复习";
+    else if (cat === "solid") label = "🟠 巩固中 · " + nextDueLabel(v);
+    else label = "🔵 连对 " + (v.reps || 0) + " 次 · 间隔 " + (v.interval || 1) + " 天 · " + nextDueLabel(v);
+    return '<button class="vp-status ' + cat + '" data-rid="' + i + '" title="点击单独复习这个词">' + label + "</button>";
   }
   // 刷新工具栏角标 + 头部复习按钮
   function updateVocabBadge() {
@@ -2503,7 +2518,7 @@
     var v = state.reviewQueue[state.reviewPos];
     var total = state.reviewQueue.length;
     var pos = state.reviewPos + 1;
-    var stageTxt = isMastered(v) ? "已掌握 · 维护复习" : "第 " + ((v.level || 0) + 1) + " / " + REVIEW_INTERVALS.length + " 阶";
+    var stageTxt = isMastered(v) ? "已掌握 · 维护复习" : "连对 " + (v.reps || 0) + " 次 · 间隔 " + (v.interval || 1) + " 天（难度 " + (v.ef || 2.5).toFixed(2) + "）";
     vocabBody.innerHTML =
       '<div class="vp-review">' +
         '<div class="rv-progress">复习进度 ' + pos + " / " + total + "</div>" +
@@ -2548,7 +2563,8 @@
   }
 
   function answerReview(v, grade) {
-    scheduleWord(v, grade);
+    // 内嵌生词本沿用二元操作：记得 = q4，忘了 = q1（与 vocab.html 数据模型一致）
+    sm2Review(v, grade === "good" ? 4 : 1);
     saveVocab(); // 复习记录持久化
     state.reviewStats[grade === "good" ? "good" : "again"]++;
     state.reviewPos++;

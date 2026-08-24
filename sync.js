@@ -38,6 +38,23 @@ async function _loadClient() {
 
 function _uid() { return _user ? _user.id : null; }
 
+// vocab 表是否已迁移 SM-2 列（ef/interval）的探测结果缓存（会话内有效）
+let _vocabSm2Column = null;
+// 一次性探测 vocab 表是否含 ef/interval 列（SM-2 迁移前为 false，迁移后为 true；会话内缓存）。
+// 迁移前若直接 insert ef/interval 会让 PostgREST 报「column does not exist」导致上传整体失败，
+// 因此未迁移时按旧结构写入，保证稳定版不报错；迁移后自动带上 ef/interval。
+async function _vocabSupportsSm2(c, uid) {
+  if (_vocabSm2Column !== null) return _vocabSm2Column;
+  try {
+    await c.from("vocab").select("ef").eq("user_id", uid).limit(1);
+    _vocabSm2Column = true;
+  } catch (e) {
+    console.warn("[Sync] vocab 表尚无 ef/interval 列（未迁移），按旧结构写入", e && e.message);
+    _vocabSm2Column = false;
+  }
+  return _vocabSm2Column;
+}
+
 const Sync = {
   // 启动时调用：加载客户端 + 恢复会话
   async init() {
@@ -116,6 +133,7 @@ const Sync = {
         word: r.word, note: r.note, example: r.example,
         srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
         level: r.level, reps: r.reps, due: r.due,
+        ef: r.ef, interval: r.interval,
         lastReview: r.last_review, lastGrade: r.last_grade,
         createdAt: r.created_at, updatedAt: r.updated_at,
       });
@@ -342,6 +360,7 @@ const Sync = {
           word: r.word, note: r.note, example: r.example,
           srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
           level: r.level, reps: r.reps, due: r.due,
+          ef: r.ef, interval: r.interval,
           lastReview: r.last_review, lastGrade: r.last_grade,
           createdAt: r.created_at, updatedAt: r.updated_at,
         };
@@ -369,14 +388,21 @@ const Sync = {
     }
     await c.from("vocab").delete().eq("user_id", uid).eq("material_id", materialId);
     if (!merged.length) return;
+    const supportsSm2 = await _vocabSupportsSm2(c, uid);
     const rows = merged.map(function (v) {
-      return {
+      const row = {
         user_id: uid, material_id: materialId,
         word: v.word || "", note: v.note || "", example: v.example || "",
         src_sentence_idx: v.srcSentenceIdx ?? null, src_text: v.srcText || "",
         level: v.level || 0, reps: v.reps || 0, due: v.due || null,
         last_review: v.lastReview || null, last_grade: v.lastGrade || null,
       };
+      // SM-2 字段：迁移后写入，未迁移时跳过（避免 PostgREST 列不存在报错）
+      if (supportsSm2) {
+        row.ef = (v.ef == null) ? null : v.ef;
+        row.interval = (v.interval == null) ? null : v.interval;
+      }
+      return row;
     });
     const { error } = await c.from("vocab").insert(rows);
     if (error) throw error;
@@ -686,10 +712,15 @@ Sync.pushLocalAll = async function (existingIds, deletedIds) {
       var audioSynced = false;
       try { audioSynced = localStorage.getItem("shadowing:audio_synced:" + id) === "1"; } catch (_) {}
       const uploadBlob = !!blob && !audioSynced;
-      // 云端已有该材料 → 跳过上传（但仍标记为已同步）
+      // 云端已有该材料 → 跳过材料/音频重传（保留句子与音频），但【生词仍需合并上传】：
+      // 否则「本地在该材料上新增的词」永远传不上云端（之前的漏传 bug）。
       if (skip && skip.has(id)) {
         synced.add(id);
-        console.log("[Sync] pushLocalAll 跳过（云端已有）:", id);
+        console.log("[Sync] pushLocalAll 跳过材料重传（云端已有），合并生词:", id);
+        try {
+          const vb = JSON.parse(localStorage.getItem("shadowing:vocab:" + id) || "[]");
+          if (vb && vb.length) await Sync.upsertVocab(id, vb);
+        } catch (e) {}
         continue;
       }
       // ⚠️ 曾经同步过、但云端现在查不到 → 说明被其他端删除 → 删本地、不回传（核心防复活逻辑）

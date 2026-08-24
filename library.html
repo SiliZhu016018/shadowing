@@ -265,12 +265,12 @@ function loadProgress(materialId) {
   try { return JSON.parse(localStorage.getItem(lsKey("progress", materialId)) || "{}"); }
   catch (_) { return {}; }
 }
-function loadHard(materialId) {
-  try { return JSON.parse(localStorage.getItem(lsKey("hard", materialId)) || "[]"); }
-  catch (_) { return []; }
-}
 function isDueWord(v) { return (v.due || 0) <= Date.now(); }
-function isMastered(v) { return (v.level || 0) >= 8; }
+// SM-2：间隔 ≥ 21 天为已掌握；兼容旧艾宾浩斯数据（level≥8 视作已掌握）
+function isMastered(v) {
+  if (v.interval != null && !isNaN(v.interval)) return v.interval >= 21;
+  return (v.level || 0) >= 8;
+}
 
 function toast(msg, ms) {
   const t = document.getElementById("toast");
