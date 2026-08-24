@@ -815,14 +815,9 @@
     if (window.Sync && typeof Sync.pullVocabOnly === "function" && Sync.isAuthed() && state.materialId) {
       Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
     }
-    // 移动端 / iOS：如果已有本地 blob，初始化 Web Audio 引擎
-    if (_isMobile() && !_wa.active && state.audioBlob) {
-      _waInit(state.audioBlob).then(function () {
-        console.log("[loadMaterial] ✓ Web Audio 引擎已就绪");
-      }).catch(function (e) {
-        console.warn("[loadMaterial] Web Audio 初始化失败:", e);
-      });
-    }
+    // ⚠️ 不在此处初始化 Web Audio 引擎：loadMaterial 可能在「非用户手势」时机被调用（如 sync 完成后自动加载），
+    //    iOS 会静默忽略 AudioContext.resume()，导致 decodeAudioData 永久挂起。
+    //    WA 引擎改为在「第一次点句子播放」（用户手势内）才初始化（见 playSentence）。
   };
 
   // ---------- 渲染列表 ----------
@@ -1210,14 +1205,9 @@
       audio.src = objUrl;
       _audioLoading = null;
       console.log("[ensureLocalAudio] ✓ 已下载, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
-      // 移动端 / iOS：同时初始化 Web Audio 引擎（解码全文，逐句精确定位用）
-      if (_isMobile() && !_wa.active) {
-        _waInit(blob).then(function () {
-          console.log("[ensureLocalAudio] ✓ Web Audio 引擎已就绪，逐句定位将使用采样级精度");
-        }).catch(function (e) {
-          console.warn("[ensureLocalAudio] Web Audio 初始化失败，回退 <audio> seek:", e);
-        });
-      }
+      // ⚠️ 不在此处初始化 Web Audio 引擎：本函数常在「非用户手势」时机被调用，
+      //    iOS 会静默忽略 AudioContext.resume()，导致 decodeAudioData 永久挂起。
+      //    WA 引擎改为在「第一次点句子播放」（用户手势内）才初始化（见 playSentence）。
       toast("✅ 音频已就绪");
       return objUrl;
     }).catch(function (err) {
@@ -1267,35 +1257,89 @@
 
   // 用 blob 或 URL 初始化 Web Audio 引擎（解码全文，一次性开销）
   // 返回 Promise，resolve 后即可用 waPlaySentence() 逐句精确定位播放
+  //
+  // ⚠️ iOS 关键注意：
+  //   1) decodeAudioData 必须用【回调风格】，Promise 风格在 iOS Safari 上会挂起不执行
+  //   2) AudioContext 必须在【用户手势】内创建/恢复，否则 resume() 被静默忽略
   function _waInit(blobOrUrl) {
-    if (_wa.ctx) { /* 已初始化 */ return Promise.resolve(); }
+    if (_wa.ctx && _wa.buf && _wa.active) return Promise.resolve();
+    if (_wa._initPromise) return _wa._initPromise; // 防并发重复初始化
+
     var fetchUrl = (typeof blobOrUrl === "string") ? blobOrUrl :
                    (blobOrUrl instanceof Blob) ? URL.createObjectURL(blobOrUrl) : null;
     if (!fetchUrl) return Promise.reject("[WA] 无有效音频源");
+
     console.log("[WA] 正在初始化 Web Audio 引擎（", _isIOS() ? "iOS" : "桌面", "）...");
-    return fetch(fetchUrl).then(function (res) {
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      return res.arrayBuffer();
-    }).then(function (ab) {
-      if (!_wa.ctx) {
-        _wa.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      // 如果上下文被挂起（iOS 需要用户交互才能恢复），先 resume
-      if (_wa.ctx.state === "suspended") {
-        return _wa.ctx.resume().then(function () {
-          return _wa.ctx.decodeAudioData(ab);
-        });
-      }
-      return _wa.ctx.decodeAudioData(ab);
-    }).then(function (decoded) {
-      _wa.buf = decoded;
-      _wa.active = true;
-      console.log("[WA] ✓ 解码完成, 时长:", decoded.duration.toFixed(1), "s, 采样率:", decoded.sampleRate, "Hz");
-    }).catch(function (err) {
-      console.warn("[WA] 初始化失败，回退 <audio> 元素:", err);
-      _wa.active = false;
-      throw err;
+
+    _wa._initPromise = new Promise(function (resolve, reject) {
+      // 1) 取音频二进制
+      fetch(fetchUrl).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.arrayBuffer();
+      }).then(function (ab) {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) { reject("[WA] 浏览器不支持 AudioContext"); return; }
+
+        // 2) 创建 AudioContext（应在用户手势内）
+        try {
+          if (!_wa.ctx) _wa.ctx = new Ctx();
+        } catch (e) { reject(e); return; }
+
+        // 3) 确保上下文已运行（suspended → resume），再解码
+        function doDecode() {
+          // ✅ 回调风格 decodeAudioData（iOS 兼容）
+          try {
+            _wa.ctx.decodeAudioData(ab,
+              function onOk(decoded) {
+                _wa.buf = decoded;
+                _wa.active = true;
+                _wa._initPromise = null;
+                console.log("[WA] ✓ 解码完成, 时长:", decoded.duration.toFixed(1), "s, 采样率:", decoded.sampleRate, "Hz");
+                resolve();
+              },
+              function onErr(err) {
+                console.warn("[WA] decodeAudioData 失败:", err);
+                _wa.active = false;
+                _wa._initPromise = null;
+                reject(err || new Error("decodeAudioData failed"));
+              }
+            );
+          } catch (e) {
+            console.warn("[WA] decodeAudioData 同步异常:", e);
+            _wa.active = false;
+            _wa._initPromise = null;
+            reject(e);
+          }
+        }
+
+        if (_wa.ctx.state === "suspended") {
+          // resume 可能返回 Promise（标准）或 undefined（旧 Safari），两种都处理
+          var pr = _wa.ctx.resume ? _wa.ctx.resume() : null;
+          if (pr && pr.then) pr.then(doDecode).catch(doDecode);
+          else doDecode();
+        } else {
+          doDecode();
+        }
+      }).catch(function (err) {
+        _wa._initPromise = null;
+        console.warn("[WA] 初始化失败:", err);
+        reject(err);
+      });
     });
+
+    // 超时保护：15 秒内未就绪则放弃（回退 <audio>）
+    var timeout = setTimeout(function () {
+      if (_wa._initPromise) {
+        console.warn("[WA] 初始化超时（15s），回退 <audio> 元素");
+        _wa.active = false;
+        _wa._initPromise = null;
+      }
+    }, 15000);
+
+    _wa._initPromise.finally ? _wa._initPromise.finally(function () { clearTimeout(timeout); })
+                            : _wa._initPromise.then(function () { clearTimeout(timeout); }, function () { clearTimeout(timeout); });
+
+    return _wa._initPromise;
   }
 
   // 从指定句子索引开始播放（采样级精确定位）
@@ -1521,11 +1565,41 @@
     const s = state.sentences[i];
     state.lastIndex = i;
     // ── iOS / 移动端：使用 Web Audio API 精确引擎（绕开 <audio>.currentTime 的 seek 硬伤）──
-    if (_wa.active && _wa.buf) {
+    if (_isMobile()) {
       audio.playbackRate = state.rate; // 同步 rate（UI 显示用）
-      return _waPlaySentence(i);
+      if (_wa.active && _wa.buf) {
+        return _waPlaySentence(i);
+      }
+      // 引擎未就绪：本次点击即用户手势，正好用于初始化 AudioContext
+      if (state.audioBlob && !_wa._initPromise) {
+        toast("⏳ 正在准备精确播放引擎（首次约数秒）...");
+        _waInit(state.audioBlob).then(function () {
+          _waPlaySentence(i);
+        }).catch(function (e) {
+          console.warn("[WA] 初始化失败，本次回退 <audio>:", e);
+          _wa.active = false;
+          _playSentenceByAudio(i);
+        });
+        return;
+      }
+      // 正在初始化中（_wa._initPromise 存在）：等它完成会自动播放当前句
+      if (_wa._initPromise) {
+        _wa._initPromise.then(function () { _waPlaySentence(i); })
+                        .catch(function () { _playSentenceByAudio(i); });
+        return;
+      }
+      // 无 blob（极端情况）：直接走 <audio>
+      return _playSentenceByAudio(i);
     }
     // ── 桌面端：使用 <audio> 元素 + seekAndPlay ──
+    _playSentenceByAudio(i);
+  }
+
+  // 桌面端 / 回退路径：使用 <audio> 元素 + seekAndPlay
+  function _playSentenceByAudio(i) {
+    if (i < 0 || i >= state.sentences.length) return;
+    const s = state.sentences[i];
+    state.lastIndex = i;
     state.playingIndex = i;
     state._hl = i;
     audio.playbackRate = state.rate;
