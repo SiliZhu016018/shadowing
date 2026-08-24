@@ -843,6 +843,14 @@
       // 点击播放图标：当前句 → 暂停/继续；其他句 → 播放该句
       ico.addEventListener("click", function (e) {
         e.stopPropagation();
+        // ✅ WA 模式：用 _waPause/_waResume 而非 audio.pause/play
+        if (_wa.active) {
+          if (_wa.playing) { _waPause(); return; }
+          if (_wa.pausedAt != null) { _waResume(); return; }
+          // 不在播也不在暂停状态 → 直接播放该句
+          playSentence(i);
+          return;
+        }
         if (state.playingIndex === i && !audio.paused) {
           audio.pause();
         } else {
@@ -1159,7 +1167,11 @@
     const playingIdx = state.playingIndex;
     for (let r = 0; r < rows.length; r++) {
       const ico = rows[r].querySelector(".play-ico");
-      if (ico) ico.textContent = (r === playingIdx && !audio.paused) ? "⏸" : "▶";
+      if (!ico) continue;
+      // ✅ WA 模式用 _wa.playing 判断，<audio> 模式用 !audio.paused
+      const isPlaying = _wa.active ? (_wa.playing && r === playingIdx)
+                                     : (r === playingIdx && !audio.paused);
+      ico.textContent = isPlaying ? "⏸" : "▶";
     }
   }
 
@@ -1372,6 +1384,8 @@
 
     // 停止上一个 source node
     _waStop();
+    // ✅ 确保 <audio> 不在播放（防止 iOS 上 <audio> 和 WA 同时响）
+    if (!audio.paused) audio.pause();
 
     var offset = s.start;
     var duration = s.end - s.start;
@@ -1665,6 +1679,11 @@
 
   // 桌面端 / 回退路径：使用 <audio> 元素 + seekAndPlay
   function _playSentenceByAudio(i) {
+    // ✅ 安全网：WA 已激活时绝不走 <audio> 路径（否则 iOS 会触发全文播放 + 无法暂停）
+    if (_wa.active && _wa.buf) {
+      console.warn("[_playSentenceByAudio] WA 已激活，拦截 <audio> 回退，转用 _waPlaySentence");
+      return _waPlaySentence(i);
+    }
     if (i < 0 || i >= state.sentences.length) return;
     const s = state.sentences[i];
     state.lastIndex = i;
@@ -1683,9 +1702,13 @@
   function togglePlayPause() {
     if (state.playingIndex == null && state.lastIndex == null) return;
     // ── WA 模式（iOS）──
-    if (_wa.active && _wa.playing) { _waPause(); return; }
-    if (_wa.active && _wa.pausedAt != null) { _waResume(); return; }
-    if (_wa.active && state.playingIndex == null) { _waPlaySentence(state.lastIndex); return; }
+    if (_wa.active) {
+      if (_wa.playing) { _waPause(); return; }
+      if (_wa.pausedAt != null) { _waResume(); return; }
+      // WA 模式下不播也不暂停 → 播放最后一句
+      _waPlaySentence(state.lastIndex);
+      return;
+    }
     // ── <audio> 模式（桌面）──
     if (audio.paused) {
       if (state.playingIndex == null) playSentence(state.lastIndex);
@@ -1712,8 +1735,10 @@
   }
 
   audio.addEventListener("timeupdate", function () {
-    // Web Audio 模式下：<audio> 不参与播放，timeupdate 数据无效，由 _waStartProgressMonitor 用 RAF 驱动高亮
-    if (_wa.active && _wa.playing) return;
+    // ✅ Web Audio 模式下：<audio> 完全不参与播放，timeupdate 数据全部无效。
+    //   必须用 _wa.active（不仅 _wa.playing）守卫——因为句子间隙 _wa.playing=false，
+    //   若只检查 _wa.playing，<audio> 的 timeupdate 会趁虚而入用错误 currentTime 重算高亮 → 高亮错行。
+    if (_wa.active) return;
     // 试听区间：到结束点自动停，不干扰正常跟读高亮
     if (state.previewEnd != null) {
       if (audio.currentTime >= state.previewEnd - 0.04) { audio.pause(); state.previewEnd = null; }
@@ -1736,6 +1761,9 @@
 
     // 停止点始终用「当前这句」的结束时间（严格按编辑分段，仅在末尾留 0.02s 余量）
     if (t >= cur.end - 0.02) {
+      // ✅ WA 模式下：<audio> 的自动进句/循环完全由 _waPlaySentence 的 onended 处理，
+      //   此处绝不能调 audio.play() / seekAndPlay，否则会在 WA 播放间隙触发 <audio> 全文播放
+      if (_wa.active) return;
       if (state.loop) {
         // 循环：同样先精确 seek 再续播，避免 iOS 循环点漂移
         seekAndPlay(cur.start, function () { const p = audio.play(); if (p && p.catch) p.catch(function () {}); });
