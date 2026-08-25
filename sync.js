@@ -140,6 +140,7 @@ const Sync = {
         srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
         level: r.level, reps: r.reps, due: r.due,
         ef: r.ef, interval: r.interval,
+        ef_r: r.ef_r, interval_r: r.interval_r, reps_r: r.reps_r, due_r: r.due_r,
         lastReview: r.last_review, lastGrade: r.last_grade,
         createdAt: r.created_at, updatedAt: r.updated_at,
       });
@@ -366,6 +367,7 @@ const Sync = {
           srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
           level: r.level, reps: r.reps, due: r.due,
           ef: r.ef, interval: r.interval,
+          ef_r: r.ef_r, interval_r: r.interval_r, reps_r: r.reps_r, due_r: r.due_r,
           lastReview: r.last_review, lastGrade: r.last_grade,
           createdAt: r.created_at, updatedAt: r.updated_at,
         };
@@ -407,6 +409,11 @@ const Sync = {
       if (supportsSm2) {
         row.ef = (v.ef == null) ? 2.5 : v.ef;           // SM2_EF_INIT
         row.interval = (v.interval == null) ? 1 : v.interval; // 默认 1 天
+        // 反向复习调度（看释义猜词 / 例句挖空，共用「反向 SM-2」），与正向独立
+        row.ef_r = (v.ef_r == null) ? 2.5 : v.ef_r;
+        row.interval_r = (v.interval_r == null) ? 1 : v.interval_r;
+        row.reps_r = (v.reps_r == null) ? 0 : v.reps_r;
+        row.due_r = (v.due_r == null) ? 0 : v.due_r;
       }
       return row;
     });
@@ -496,6 +503,7 @@ const Sync = {
         srcSentenceIdx: r.src_sentence_idx, srcText: r.src_text,
         level: r.level, reps: r.reps, due: r.due,
         ef: r.ef, interval: r.interval,
+        ef_r: r.ef_r, interval_r: r.interval_r, reps_r: r.reps_r, due_r: r.due_r,
         lastReview: r.last_review, lastGrade: r.last_grade,
         createdAt: r.created_at, updatedAt: r.updated_at,
       };

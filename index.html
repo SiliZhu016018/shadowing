@@ -440,6 +440,45 @@
   .vp-review-done { text-align: center; padding: 30px 8px; font-size: 17px; font-weight: 700; }
   .vp-review-done small { display: block; color: var(--muted); font-weight: 400; margin-top: 6px; font-size: 13px; }
 
+  /* 复习模式 Tab（混合 / 正背 / 反背 / 挖空） */
+  .vp-mode-tabs { display: flex; gap: 4px; padding: 8px 12px 0; flex-wrap: wrap; }
+  .vp-mode-tabs button {
+    flex: 1 1 0; min-width: 56px; padding: 6px 4px; font-size: 12.5px; font-weight: 600;
+    border-radius: 9px; border: 1px solid var(--border-strong); background: transparent; color: var(--muted);
+    cursor: pointer; position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  }
+  .vp-mode-tabs button.active { background: var(--grad-accent); color: #fff; border-color: transparent; box-shadow: var(--shadow-glow); }
+  .tab-badge {
+    display: none; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+    background: var(--rec); color: #fff; font-size: 10px; line-height: 16px; font-weight: 700;
+  }
+  .vp-mode-tabs button.active .tab-badge { background: rgba(255,255,255,.28); }
+
+  /* 复习进度里的模式标签 */
+  .rv-mode { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .rv-mode-forward { background: rgba(59,130,246,.12); color: var(--accent); }
+  .rv-mode-reverse { background: rgba(255,159,10,.14); color: var(--hard); }
+  .rv-mode-cloze   { background: rgba(52,215,123,.14); color: var(--ok); }
+  .rv-mode-mix     { background: var(--accent-soft); color: var(--accent); }
+
+  /* 反向 / 挖空卡：输入与揭示 */
+  .vp-flashcard .fc-prompt-label { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .vp-flashcard .fc-cloze { font-size: 16px; line-height: 1.6; color: var(--text); margin: 6px 0 14px; word-break: break-word; }
+  .vp-flashcard .fc-input-row { display: flex; gap: 8px; margin: 4px 0 12px; }
+  .vp-flashcard .fc-input {
+    flex: 1; padding: 11px 12px; font-size: 16px; border-radius: 12px; border: 1px solid var(--border-strong);
+    background: var(--bg); color: var(--text); outline: none;
+  }
+  .vp-flashcard .fc-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .vp-flashcard .rv-giveup {
+    width: 100%; padding: 7px; font-size: 12.5px; border-radius: 9px; background: transparent;
+    border: 1px dashed var(--border-strong); color: var(--muted); cursor: pointer; margin-bottom: 4px;
+  }
+  .vp-flashcard .fc-answer-word { font-size: 16px; margin: 6px 0 8px; }
+  .vp-flashcard .fc-answer-word b { font-size: 19px; }
+  .rv-good.preset, .rv-again.preset { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .rv-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   /* ---- 选中文字弹出按钮 ---- */
   #sel-popup {
     position: absolute; display: none; z-index: 35;
@@ -624,6 +663,12 @@
     <span id="vocab-count" style="font-size:12px;color:var(--muted);font-weight:400;">0 个词</span>
     <button id="vocab-review" class="vp-review-btn">🔁 复习</button>
     <button class="vp-close" id="vocab-close" aria-label="关闭">&times;</button>
+  </div>
+  <div class="vp-mode-tabs" id="vocab-mode-tabs">
+    <button data-mode="mix" class="active">混合</button>
+    <button data-mode="forward">正背<span class="tab-badge" id="due-fwd"></span></button>
+    <button data-mode="reverse">反背<span class="tab-badge" id="due-rev"></span></button>
+    <button data-mode="cloze">挖空<span class="tab-badge" id="due-cloze"></span></button>
   </div>
   <div class="vp-body" id="vocab-body"></div>
 </aside>
@@ -2268,6 +2313,12 @@
     if (!v.due || isNaN(v.due)) v.due = Date.parse(v.createdAt) || Date.now();
     if (v.lastReview === undefined) v.lastReview = null;
     if (v.lastGrade === undefined) v.lastGrade = null;
+    // 反向复习调度字段（看释义猜词 / 例句挖空，共用「反向 SM-2」，与正向独立）
+    // 初值镜像正向：避免老词正向已掌握、反向却一次性全涌入；新词与正向同时到期
+    if (v.ef_r == null || isNaN(v.ef_r)) v.ef_r = SM2_EF_INIT;
+    if (v.interval_r == null || isNaN(v.interval_r)) v.interval_r = (v.interval || 1);
+    if (v.reps_r == null || isNaN(v.reps_r)) v.reps_r = (v.reps || 0);
+    if (v.due_r == null || isNaN(v.due_r)) v.due_r = (v.due || Date.now());
     return v;
   }
   function isDue(v) { return (v.due || 0) <= Date.now(); }
@@ -2282,24 +2333,54 @@
     return Math.max(1, Math.round(ms / DAY_MS)) + " 天后";
   }
   // SM-2 核心：q = 回忆质量（0–5，<3 视为失败需重学）
-  function sm2Review(v, q) {
+  // mode: 'forward'（默认，操作 ef/interval/reps/due）| 'reverse' | 'cloze'（操作 ef_r/interval_r/reps_r/due_r）
+  function sm2Review(v, q, mode) {
     q = Math.max(0, Math.min(5, q | 0));
     var now = Date.now();
+    var suf = (mode === "reverse" || mode === "cloze") ? "_r" : "";  // 反向/挖空共用反向调度
     v.lastReview = now;
+    var ef = v["ef" + suf], interval = v["interval" + suf], reps = v["reps" + suf];
     if (q < 3) {
-      v.reps = 0;
-      v.interval = SM2_FIRST;                 // 失败：次日重新学习
+      reps = 0;
+      interval = SM2_FIRST;                 // 失败：次日重新学习
     } else {
-      if (v.reps === 0) v.interval = SM2_FIRST;
-      else if (v.reps === 1) v.interval = SM2_SECOND;
-      else v.interval = Math.max(1, Math.round(v.interval * v.ef));
-      v.reps += 1;
+      if (reps === 0) interval = SM2_FIRST;
+      else if (reps === 1) interval = SM2_SECOND;
+      else interval = Math.max(1, Math.round(interval * ef));
+      reps += 1;
     }
     // 更新难度系数：回忆越轻松 ef 越高，越吃力 ef 越低（下限 1.3）
-    v.ef = v.ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
-    if (v.ef < SM2_EF_MIN) v.ef = SM2_EF_MIN;
-    v.due = now + v.interval * DAY_MS;
+    ef = ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+    if (ef < SM2_EF_MIN) ef = SM2_EF_MIN;
+    v["ef" + suf] = ef;
+    v["interval" + suf] = interval;
+    v["reps" + suf] = reps;
+    v["due" + suf] = now + interval * DAY_MS;
     v.lastGrade = q;
+  }
+  // 反向/挖空复习是否到期（与正向独立）
+  function isDueMode(v, mode) {
+    if (mode === "forward") return (v.due || 0) <= Date.now();
+    return (v.due_r || 0) <= Date.now();   // reverse / cloze 共用反向 due_r
+  }
+  function isMasteredMode(v, mode) {
+    if (mode === "forward") return (v.interval || 0) >= SM2_MASTER_DAYS;
+    return (v.interval_r || 0) >= SM2_MASTER_DAYS;
+  }
+  // 归一化单词用于「拼写校验」：小写 → 去首尾空格 → 压缩内部空格 → 去首尾标点（保留词内撇号）
+  function normalizeWord(s) {
+    if (!s) return "";
+    return s.toLowerCase().trim().replace(/\s+/g, " ").replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, "");
+  }
+  // 例句挖空：把目标词替换成等长的下划线
+  function clozeSentence(v) {
+    var ex = v.example || "";
+    var w = (v.word || "").trim();
+    if (!ex || !w) return "";
+    var escaped = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    try {
+      return ex.replace(new RegExp(escaped, "gi"), function (m) { return "_".repeat(Math.max(3, m.length)); });
+    } catch (_) { return ex; }
   }
   function classify(v) {
     if (isMastered(v)) return "mastered";
@@ -2325,11 +2406,27 @@
       badge.textContent = due > 0 ? String(due) : "";
       badge.style.display = due > 0 ? "inline-flex" : "none";
     }
+    updateModeTabBadges();
     var rb = document.getElementById("vocab-review");
     if (rb) {
       if (state.reviewing) { rb.disabled = true; rb.textContent = "复习中…"; }
-      else { rb.disabled = due === 0; rb.textContent = due > 0 ? "🔁 复习 " + due : "🔁 复习"; }
+      else {
+        var modeDue = dueCountByMode(state.reviewMode);
+        rb.disabled = modeDue === 0;
+        rb.textContent = modeDue > 0 ? "🔁 复习 " + modeDue : "🔁 复习";
+      }
     }
+  }
+  // 顶部模式 Tab 的角标（各模式独立待复习数）
+  function updateModeTabBadges() {
+    var map = { forward: "due-fwd", reverse: "due-rev", cloze: "due-cloze" };
+    Object.keys(map).forEach(function (m) {
+      var el = document.getElementById(map[m]);
+      if (!el) return;
+      var n = dueCountByMode(m);
+      el.textContent = n > 0 ? String(n) : "";
+      el.style.display = n > 0 ? "inline-flex" : "none";
+    });
   }
 
   // 渲染生词本面板
@@ -2426,13 +2523,13 @@
         });
       });
 
-      // 点击状态徽章 → 单独复习这个词
+      // 点击状态徽章 → 单独复习这个词（按当前模式）
       vocabBody.querySelectorAll(".vp-status[data-rid]").forEach(function (el) {
         el.addEventListener("click", function () {
           const idx = parseInt(el.dataset.rid, 10);
           if (isNaN(idx) || !state.vocab[idx]) return;
           state.reviewing = true;
-          state.reviewQueue = [state.vocab[idx]];
+          state.reviewQueue = [{ v: state.vocab[idx], mode: state.reviewMode === "mix" ? "forward" : state.reviewMode }];
           state.reviewPos = 0;
           renderVocab(false);
         });
@@ -2582,18 +2679,69 @@
 
   // ---------- 复习会话（闪卡模式） ----------
   state.reviewing = false;
+  state.reviewMode = "mix";     // 'mix' | 'forward' | 'reverse' | 'cloze'
   state.reviewQueue = [];
   state.reviewPos = 0;
   state.reviewStats = { good: 0, again: 0 };
 
+  // 按当前模式构建复习队列：
+  // - forward：正向 due（看词想义）
+  // - reverse：反向 due 且有 note（看义拼词）
+  // - cloze：反向 due 且有 example（例句挖空）
+  // - mix：三类并集，随机交错（混合为默认）
+  function buildReviewQueue(mode) {
+    var q = [];
+    var vocab = state.vocab;
+    function pushIf(mode2, needField) {
+      for (var i = 0; i < vocab.length; i++) {
+        var v = vocab[i];
+        if (!isDueMode(v, mode2)) continue;
+        if (needField && !(v[needField] || "").trim()) continue;
+        q.push({ v: v, mode: mode2 });
+      }
+    }
+    if (mode === "forward" || mode === "mix") pushIf("forward", null);
+    if (mode === "reverse" || mode === "mix") pushIf("reverse", "note");
+    if (mode === "cloze" || mode === "mix") pushIf("cloze", "example");
+    // Fisher–Yates 洗牌，保证混合模式正反面随机交错
+    for (var i = q.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = q[i]; q[i] = q[j]; q[j] = t;
+    }
+    return q;
+  }
+
+  // 各模式的待复习数量（用于 Tab 角标）
+  function dueCountByMode(mode) {
+    if (mode === "forward") return state.vocab.filter(function (v) { return isDueMode(v, "forward"); }).length;
+    if (mode === "reverse") return state.vocab.filter(function (v) { return isDueMode(v, "reverse") && (v.note || "").trim(); }).length;
+    if (mode === "cloze") return state.vocab.filter(function (v) { return isDueMode(v, "cloze") && (v.example || "").trim(); }).length;
+    return dueCountByMode("forward") + dueCountByMode("reverse") + dueCountByMode("cloze");
+  }
+
   function startReview() {
-    var q = dueVocab();
-    if (q.length === 0) { toast("当前没有到期待复习的词 🎉"); return; }
+    var q = buildReviewQueue(state.reviewMode);
+    if (q.length === 0) { toast("当前模式没有到期待复习的词 🎉"); return; }
     state.reviewing = true;
-    state.reviewQueue = q.slice();
+    state.reviewQueue = q;
     state.reviewPos = 0;
     state.reviewStats = { good: 0, again: 0 };
     renderVocab(false);
+  }
+
+  // 在例句文本中高亮目标词（用于挖空卡「揭示答案」）
+  function highlightWordInText(text, word) {
+    var escaped = (word || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    try {
+      return escapeHtml(text).replace(new RegExp(escaped, "gi"), function (m) { return '<span class="vocab-hl">' + m + "</span>"; });
+    } catch (_) { return escapeHtml(text); }
+  }
+
+  function reviewStageTxt(v, mode) {
+    var suf = (mode === "reverse" || mode === "cloze") ? "_r" : "";
+    return isMasteredMode(v, mode)
+      ? "已掌握 · 维护复习"
+      : "连对 " + (v["reps" + suf] || 0) + " 次 · 间隔 " + (v["interval" + suf] || 1) + " 天（难度 " + (v["ef" + suf] || 2.5).toFixed(2) + "）";
   }
 
   function renderReview() {
@@ -2607,14 +2755,19 @@
       document.getElementById("rv-done-exit").addEventListener("click", exitReview);
       return;
     }
-    var v = state.reviewQueue[state.reviewPos];
+    var item = state.reviewQueue[state.reviewPos];
+    var v = item.v;
+    var mode = item.mode || "forward";
     var total = state.reviewQueue.length;
     var pos = state.reviewPos + 1;
-    var stageTxt = isMastered(v) ? "已掌握 · 维护复习" : "连对 " + (v.reps || 0) + " 次 · 间隔 " + (v.interval || 1) + " 天（难度 " + (v.ef || 2.5).toFixed(2) + "）";
-    vocabBody.innerHTML =
-      '<div class="vp-review">' +
-        '<div class="rv-progress">复习进度 ' + pos + " / " + total + "</div>" +
-        '<div class="vp-flashcard">' +
+    var modeLabel = mode === "forward" ? "正背" : mode === "reverse" ? "反背" : "挖空";
+    var stageTxt = reviewStageTxt(v, mode);
+
+    var html = '<div class="vp-review">' +
+      '<div class="rv-progress">复习进度 ' + pos + " / " + total + ' · <span class="rv-mode rv-mode-' + mode + '">' + modeLabel + "</span></div>";
+
+    if (mode === "forward") {
+      html += '<div class="vp-flashcard">' +
           '<div class="fc-word">' + escapeHtml(v.word) + "</div>" +
           '<div class="fc-stage">' + stageTxt + "</div>" +
           '<div class="fc-answer" id="fc-answer" style="display:none">' +
@@ -2629,10 +2782,40 @@
           '<button id="rv-show" class="rv-show">👀 显示答案</button>' +
           '<button id="rv-again" class="rv-again" style="display:none">✗ 忘了</button>' +
           '<button id="rv-good" class="rv-good" style="display:none">✓ 记得</button>' +
-        "</div>" +
-        '<button id="rv-exit" class="rv-exit">退出复习</button>' +
-      "</div>";
+        "</div>";
+    } else if (mode === "reverse") {
+      html += '<div class="vp-flashcard">' +
+          '<div class="fc-prompt-label">看释义，拼出单词</div>' +
+          '<div class="fc-note">' + escapeHtml(v.note || "") + "</div>" +
+          '<div class="fc-input-row" id="fc-input-row">' +
+            '<input id="fc-input" class="fc-input" placeholder="输入单词…" autocomplete="off" autocapitalize="off" spellcheck="false" />' +
+            '<button id="rv-check" class="rv-show">校验</button>' +
+          "</div>" +
+          '<button id="rv-giveup" class="rv-giveup">想不起来了</button>' +
+          '<div class="fc-answer" id="fc-answer" style="display:none"></div>' +
+        "</div>";
+    } else { // cloze
+      html += '<div class="vp-flashcard">' +
+          '<div class="fc-prompt-label">例句挖空，填出单词</div>' +
+          '<div class="fc-cloze">' + escapeHtml(clozeSentence(v)) + "</div>" +
+          '<div class="fc-input-row" id="fc-input-row">' +
+            '<input id="fc-input" class="fc-input" placeholder="输入单词…" autocomplete="off" autocapitalize="off" spellcheck="false" />' +
+            '<button id="rv-check" class="rv-show">校验</button>' +
+          "</div>" +
+          '<button id="rv-giveup" class="rv-giveup">想不起来了</button>' +
+          '<div class="fc-answer" id="fc-answer" style="display:none"></div>' +
+        "</div>";
+    }
+    html += '<button id="rv-exit" class="rv-exit">退出复习</button></div>';
+    vocabBody.innerHTML = html;
 
+    document.getElementById("rv-exit").addEventListener("click", exitReview);
+    if (mode === "forward") bindForwardCard(v);
+    else bindActiveCard(v, mode);
+  }
+
+  // 正向卡：显示答案 → 记得/忘了（二元）
+  function bindForwardCard(v) {
     var showBtn = document.getElementById("rv-show");
     var ans = document.getElementById("fc-answer");
     var goodBtn = document.getElementById("rv-good");
@@ -2642,9 +2825,8 @@
       showBtn.style.display = "none";
       goodBtn.style.display = ""; againBtn.style.display = "";
     });
-    goodBtn.addEventListener("click", function () { answerReview(v, "good"); });
-    againBtn.addEventListener("click", function () { answerReview(v, "again"); });
-    document.getElementById("rv-exit").addEventListener("click", exitReview);
+    goodBtn.addEventListener("click", function () { answerReview(v, "good", "forward"); });
+    againBtn.addEventListener("click", function () { answerReview(v, "again", "forward"); });
     var srcBtn = vocabBody.querySelector(".rv-src");
     if (srcBtn) {
       srcBtn.addEventListener("click", function () {
@@ -2654,9 +2836,53 @@
     }
   }
 
-  function answerReview(v, grade) {
+  // 反向 / 挖空卡：输入 → 校验（系统比对拼写）→ 揭示答案 → 记得/忘了
+  function bindActiveCard(v, mode) {
+    var input = document.getElementById("fc-input");
+    var checkBtn = document.getElementById("rv-check");
+    var giveupBtn = document.getElementById("rv-giveup");
+    var ans = document.getElementById("fc-answer");
+    var inputRow = document.getElementById("fc-input-row");
+    var goodBtn = document.getElementById("rv-good");
+    var againBtn = document.getElementById("rv-again");
+    if (input) input.focus();
+
+    function reveal(userInput) {
+      var ok = normalizeWord(userInput) === normalizeWord(v.word);
+      var ansHtml = '<div class="fc-answer-word">' + (ok ? "✓ 拼写正确！" : "✗ 正确答案：") +
+        " <b>" + escapeHtml(v.word) + "</b></div>";
+      if (mode === "cloze") {
+        // 挖空：直接展示填好词的完整原句（目标词高亮）
+        ansHtml += '<div class="fc-example">' + highlightWordInText(v.example || "", v.word) + "</div>";
+      } else if (v.example) {
+        // 反向：先不出例句，点「看例句」才出
+        ansHtml += '<div class="fc-example" id="fc-example" style="display:none">"' + escapeHtml(v.example) + '"</div>' +
+          '<button id="rv-example" class="rv-src">看例句</button>';
+      }
+      ans.innerHTML = ansHtml;
+      ans.style.display = "block";
+      inputRow.style.display = "none";
+      giveupBtn.style.display = "none";
+      goodBtn.style.display = ""; againBtn.style.display = "";
+      if (ok) goodBtn.classList.add("preset"); else againBtn.classList.add("preset");
+      var exBtn = ans.querySelector("#rv-example");
+      if (exBtn) exBtn.addEventListener("click", function () {
+        var exEl = document.getElementById("fc-example");
+        if (exEl) exEl.style.display = "block";
+        exBtn.style.display = "none";
+      });
+      goodBtn.onclick = function () { answerReview(v, "good", mode); };
+      againBtn.onclick = function () { answerReview(v, "again", mode); };
+    }
+
+    checkBtn.addEventListener("click", function () { reveal(input.value); });
+    if (input) input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); reveal(input.value); } });
+    giveupBtn.addEventListener("click", function () { reveal(""); });
+  }
+
+  function answerReview(v, grade, mode) {
     // 内嵌生词本沿用二元操作：记得 = q4，忘了 = q1（与 vocab.html 数据模型一致）
-    sm2Review(v, grade === "good" ? 4 : 1);
+    sm2Review(v, grade === "good" ? 4 : 1, mode || "forward");
     saveVocab(); // 复习记录持久化
     state.reviewStats[grade === "good" ? "good" : "again"]++;
     state.reviewPos++;
@@ -2688,6 +2914,18 @@
   document.getElementById("vocab-review").addEventListener("click", function () { startReview(); });
   vocabOverlay.addEventListener("click", closeVocab);
   document.getElementById("vocab-close").addEventListener("click", closeVocab);
+  // 复习模式 Tab（混合 / 正背 / 反背 / 挖空）
+  var modeTabs = document.getElementById("vocab-mode-tabs");
+  if (modeTabs) {
+    modeTabs.querySelectorAll("button[data-mode]").forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        state.reviewMode = tab.dataset.mode;
+        modeTabs.querySelectorAll("button[data-mode]").forEach(function (b) { b.classList.remove("active"); });
+        tab.classList.add("active");
+        updateVocabBadge(); // 刷新「复习」按钮上的数量
+      });
+    });
+  }
 
   // ---------- 生词高亮 + 笔记浮层 ----------
   const vocabTip = document.getElementById("vocab-tip");
