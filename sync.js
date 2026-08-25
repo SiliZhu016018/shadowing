@@ -403,9 +403,10 @@ const Sync = {
         last_review: v.lastReview || null, last_grade: v.lastGrade || null,
       };
       // SM-2 字段：迁移后写入，未迁移时跳过（避免 PostgREST 列不存在报错）
+      // ⚠️ ef/interval 列有 NOT NULL 约束（用户 SQL 建表时指定），不可传 null → 用默认值
       if (supportsSm2) {
-        row.ef = (v.ef == null) ? null : v.ef;
-        row.interval = (v.interval == null) ? null : v.interval;
+        row.ef = (v.ef == null) ? 2.5 : v.ef;           // SM2_EF_INIT
+        row.interval = (v.interval == null) ? 1 : v.interval; // 默认 1 天
       }
       return row;
     });

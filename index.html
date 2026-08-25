@@ -3889,14 +3889,23 @@ var _pendingVocabUpload = false;  // 标记有待上传的生词
 // 立即上传待传生词（供防抖到期 / 页面切后台 / 关闭前调用）
 function _flushVocabUpload() {
   if (!_pendingVocabUpload || !state.materialId) return false;
+  var vocabCount = (state.vocab || []).length;
+  var mid = state.materialId;
   if (!Sync.isAuthed()) {
-    console.log("[sync vocab] 有待传生词但 Sync 未登录，登录后由 sync-signed-in 补传");
+    console.log("[sync vocab] 有待传", vocabCount, "个生词但 Sync 未登录，登录后由 sync-signed-in 补传");
     return false;
   }
   _pendingVocabUpload = false;
-  Sync.uploadVocab(state.materialId, state.vocab || [])
-    .then(function () { console.log("[sync vocab] ✅ 已上传", (state.vocab || []).length, "个生词到", state.materialId); })
-    .catch(function (err) { console.warn("[sync upload vocab] 失败", err); });
+  Sync.uploadVocab(mid, state.vocab || [])
+    .then(function () {
+      console.log("[sync vocab] ✅ 已上传", vocabCount, "个生词到", mid);
+      if (typeof window.toast === "function") window.toast("📤 生词已同步云端 (" + vocabCount + " 个)");
+    })
+    .catch(function (err) {
+      console.warn("[sync vocab] ❌ 上传失败:", err && err.message || err);
+      // 失败不重置 pending 标记：下次触发（如再切一次后台）会重试
+      _pendingVocabUpload = true;
+    });
   return true;
 }
 function syncUploadVocabDebounced() {
