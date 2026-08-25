@@ -837,10 +837,12 @@
     // 云端同步：推迟到页面稳定后再执行（手机弱网环境下不抢带宽）
     // ⚡ 延迟 5 秒上传 + 8 秒拉生词：用户先看到内容、先能播放
     if (typeof syncUploadCurrentMaterial === "function") setTimeout(syncUploadCurrentMaterial, 5000);
-    if (window.Sync && typeof Sync.pullVocabOnly === "function" && Sync.isAuthed() && state.materialId) {
+    // 打开材料即尝试同步生词；登录可能在加载材料之后才完成，
+    // 若此刻未登录 pullVocabOnly 会直接 return，等登录完成由 sync-signed-in 事件补拉（见下方监听）。
+    if (window.Sync && typeof Sync.pullVocabOnly === "function" && state.materialId) {
       setTimeout(function () {
         Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
-      }, 8000);
+      }, 3000);
     }
     // ⚠️ 不在此处初始化 Web Audio 引擎：loadMaterial 可能在「非用户手势」时机被调用（如 sync 完成后自动加载），
     //    iOS 会静默忽略 AudioContext.resume()，导致 decodeAudioData 永久挂起。
@@ -3897,9 +3899,14 @@ function syncUploadVocabDebounced() {
 }
 // Sync 登录后补传待上传的生词
 window.addEventListener("sync-signed-in", function () {
+  // 补传：登录前添加的生词（Sync 未就绪时已排队，见 syncUploadVocabDebounced）
   if (_pendingVocabUpload && state.materialId && state.vocab.length) {
     _pendingVocabUpload = false;
     Sync.uploadVocab(state.materialId, state.vocab).catch(function (err) { console.warn("[sync vocab after signin]", err); });
+  }
+  // 补拉：打开材料时若 Sync 尚未登录，pullVocabOnly 被跳过，这里在登录完成后补拉当前材料生词
+  if (state.materialId && typeof Sync.pullVocabOnly === "function") {
+    Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[sync vocab 补拉失败]", e); });
   }
 });
 // 防抖上传进度

@@ -29,9 +29,15 @@ async function _loadClient() {
   // 恢复已有会话
   const { data: { session } } = await _sb.auth.getSession();
   if (session) _user = { id: session.user.id, email: session.user.email || "" };
+  // ⚡ 登录/会话就绪时广播事件，让页面侧（补传、补拉生词）能感知
+  function _notifySignedIn() {
+    if (_user) { try { window.dispatchEvent(new Event("sync-signed-in")); } catch (_) {} }
+  }
+  if (_user) _notifySignedIn(); // 初始恢复会话也可能早于页面渲染，需补广播一次
   _sb.auth.onAuthStateChange(function (_evt, session) {
     _user = session && session.user ? { id: session.user.id, email: session.user.email || "" } : null;
     _authCbs.forEach(function (cb) { try { cb(_user); } catch (e) {} });
+    _notifySignedIn(); // 会话变化（登录/恢复/刷新 token）时广播
   });
   return _sb;
 }
