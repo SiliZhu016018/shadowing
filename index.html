@@ -839,9 +839,12 @@
     if (typeof syncUploadCurrentMaterial === "function") setTimeout(syncUploadCurrentMaterial, 5000);
     // 打开材料即尝试同步生词；登录可能在加载材料之后才完成，
     // 若此刻未登录 pullVocabOnly 会直接 return，等登录完成由 sync-signed-in 事件补拉（见下方监听）。
-    if (window.Sync && typeof Sync.pullVocabOnly === "function" && state.materialId) {
+    if (window.Sync && typeof Sync.pullVocabOnly === "function" && state.materialId && state.materialId !== "material") {
       setTimeout(function () {
-        Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
+        Sync.pullVocabOnly(state.materialId).then(function () {
+          if (typeof loadVocab === "function") loadVocab();
+          else console.warn("[loadMaterial] loadVocab 尚未就绪，跳过刷新");
+        }).catch(function (e) { console.warn("[loadMaterial] pull vocab 失败", e); });
       }, 3000);
     }
     // ⚠️ 不在此处初始化 Web Audio 引擎：loadMaterial 可能在「非用户手势」时机被调用（如 sync 完成后自动加载），
@@ -3803,8 +3806,8 @@ function maybeFocusPull() {
   if (now - _lastFocusPull < 2000) return;
   _lastFocusPull = now;
   syncPullCurrentMaterial().then(function (c) {
-    if (c && window.Sync && Sync.isAuthed() && state.materialId && typeof Sync.pullVocabOnly === "function") {
-      Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function () {});
+    if (c && window.Sync && Sync.isAuthed() && state.materialId && state.materialId !== "material" && typeof Sync.pullVocabOnly === "function") {
+      Sync.pullVocabOnly(state.materialId).then(function () { if (typeof loadVocab === "function") loadVocab(); }).catch(function () {});
     }
   });
 }
@@ -3883,30 +3886,47 @@ function syncUploadCurrentMaterial() {
 // 修复：Sync 未就绪时不丢弃，等登录/初始化完成后再上传
 var _vocabUploadT = null;
 var _pendingVocabUpload = false;  // 标记有待上传的生词
+// 立即上传待传生词（供防抖到期 / 页面切后台 / 关闭前调用）
+function _flushVocabUpload() {
+  if (!_pendingVocabUpload || !state.materialId) return false;
+  if (!Sync.isAuthed()) {
+    console.log("[sync vocab] 有待传生词但 Sync 未登录，登录后由 sync-signed-in 补传");
+    return false;
+  }
+  _pendingVocabUpload = false;
+  Sync.uploadVocab(state.materialId, state.vocab || [])
+    .then(function () { console.log("[sync vocab] ✅ 已上传", (state.vocab || []).length, "个生词到", state.materialId); })
+    .catch(function (err) { console.warn("[sync upload vocab] 失败", err); });
+  return true;
+}
 function syncUploadVocabDebounced() {
   if (!state.materialId) return;
   _pendingVocabUpload = true;
   clearTimeout(_vocabUploadT);
-  _vocabUploadT = setTimeout(function () {
-    if (!Sync.isAuthed()) {
-      // Sync 未登录：不报错，等用户登录后由 pullFromCloud 合并
-      console.log("[sync vocab] 未登录，跳过上传（数据已存本地）");
-      return;
-    }
-    _pendingVocabUpload = false;
-    Sync.uploadVocab(state.materialId, state.vocab || []).catch(function (err) { console.warn("[sync upload vocab]", err); });
-  }, 1500);
+  _vocabUploadT = setTimeout(_flushVocabUpload, 1500);
 }
-// Sync 登录后补传待上传的生词
+// ⚡ 页面切后台 / 关闭前立刻 flush：避免「电脑加完词立刻拿手机」时 1.5s 防抖未触发导致生词丢失
+document.addEventListener("visibilitychange", function () { if (document.hidden) _flushVocabUpload(); });
+window.addEventListener("pagehide", _flushVocabUpload);
+// Sync 登录后补传/补拉生词
 window.addEventListener("sync-signed-in", function () {
   // 补传：登录前添加的生词（Sync 未就绪时已排队，见 syncUploadVocabDebounced）
-  if (_pendingVocabUpload && state.materialId && state.vocab.length) {
+  if (_pendingVocabUpload && state.materialId && state.vocab && state.vocab.length) {
     _pendingVocabUpload = false;
     Sync.uploadVocab(state.materialId, state.vocab).catch(function (err) { console.warn("[sync vocab after signin]", err); });
   }
   // 补拉：打开材料时若 Sync 尚未登录，pullVocabOnly 被跳过，这里在登录完成后补拉当前材料生词
-  if (state.materialId && typeof Sync.pullVocabOnly === "function") {
-    Sync.pullVocabOnly(state.materialId).then(function () { loadVocab(); }).catch(function (e) { console.warn("[sync vocab 补拉失败]", e); });
+  // 防守：materialId 必须是有效 UUID（不能是 "material" 等默认值）
+  var mid = state.materialId;
+  if (mid && mid !== "material" && /^[0-9a-f\-]{20,}$/i.test(mid) && typeof Sync.pullVocabOnly === "function") {
+    Sync.pullVocabOnly(mid).then(function () {
+      // loadVocab 可能尚未定义（事件在脚本解析完成前触发），用 window 访问 + 兜底
+      if (typeof window.loadVocab === "function") { window.loadVocab(); }
+      else {
+        try { state.vocab = JSON.parse(localStorage.getItem("shadowing:vocab:" + mid) || "[]"); } catch (_) { state.vocab = []; }
+        console.log("[sync vocab] 补拉完成（loadVocab 尚未就绪，直接读取）");
+      }
+    }).catch(function (e) { console.warn("[sync vocab 补拉失败]", e); });
   }
 });
 // 防抖上传进度
