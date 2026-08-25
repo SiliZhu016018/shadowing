@@ -1394,6 +1394,24 @@
     return _isIOS() || /Android/i.test(navigator.userAgent);
   }
 
+  // iOS 双层解锁之「锁 B」：在用户手势内对 <audio> 调一次 play() 再立即 pause，
+  // 激活底层音频输出子系统，否则 Web Audio 的 start() 静默不出声。
+  // 每次播放手势都调用一次（幂等；非手势/非 iOS 时自动跳过），保证后台返回/同步后也能出声。
+  function _waUnlockAudio() {
+    if (!_isIOS() || !audio) return;
+    if (!audio.paused) return;
+    var _done = false;
+    function _stop() {
+      if (_done) return;
+      _done = true;
+      try { audio.pause(); audio.currentTime = 0; } catch (_) {}
+    }
+    var p = audio.play();
+    if (p && p.then) p.then(_stop).catch(_stop);
+    else _stop();
+    setTimeout(_stop, 200);
+  }
+
   // 用 blob 或 URL 初始化 Web Audio 引擎（解码全文，一次性开销）
   // 返回 Promise，resolve 后即可用 waPlaySentence() 逐句精确定位播放
   //
@@ -1419,38 +1437,16 @@
         var Ctx = window.AudioContext || window.webkitAudioContext;
         if (!Ctx) { reject("[WA] 浏览器不支持 AudioContext"); return; }
 
-        // 2) 创建 AudioContext（应在用户手势内）
+        // 2) 创建 AudioContext（应在用户手势内）；若旧 ctx 已被 iOS 关闭则先丢弃重建
         try {
+          if (_wa.ctx && _wa.ctx.state === "closed") { try { _wa.ctx.close(); } catch (_) {} _wa.ctx = null; }
           if (!_wa.ctx) _wa.ctx = new Ctx();
         } catch (e) { reject(e); return; }
 
         // 3) 确保上下文已运行（suspended → resume），再解码
-        // 3.5) ✅ iOS 双层解锁：iOS Safari 有两把独立的锁：
-        //   - 锁 A: AudioContext 必须 resume（上面已处理）
-        //   - 锁 B: <audio>.play() 必须在用户手势内调用过至少一次，否则底层音频输出子系统不激活
-        //     → Web Audio API 的 start() 静默不发声（不报错、ctx.state=running）
-        //   解法：在用户手势内 play+立即 pause（激活但不真的播放出声）
-        //   ⚠️ 安全网：play() 后必须确保 pause() + currentTime=0，否则 <audio> 会在后台播全文且无法被 WA 控制
-        if (_isIOS() && audio && audio.paused) {
-          var _unlockDone = false;
-          function _ensureAudioStopped() {
-            if (_unlockDone) return;
-            _unlockDone = true;
-            audio.pause();
-            audio.currentTime = 0; // 归零防止残留播放位置
-            console.log("[WA] ✓ iOS <audio> 双层解锁完成（已强制停止）");
-          }
-          var unlockPromise = audio.play();
-          if (unlockPromise && unlockPromise.then) {
-            unlockPromise.then(_ensureAudioStopped)
-                       .catch(function () { _ensureAudioStopped(); });
-          } else {
-            // 旧 Safari: play() 同步成功
-            _ensureAudioStopped();
-          }
-          // 兜底：即使 promise 永远不 resolve，200ms 后也强制停
-          setTimeout(_ensureAudioStopped, 200);
-        }
+        // 3.5) ✅ iOS 双层解锁：锁 A=AudioContext.resume（下面 doDecode 前处理）；
+        //      锁 B=<audio> 必须在用户手势内 play 过一次（见 _waUnlockAudio，每次播放手势调用）。
+        _waUnlockAudio();
 
         function doDecode() {
           // ✅ 回调风格 decodeAudioData（iOS 兼容）
@@ -1514,6 +1510,7 @@
     if (!_wa.buf || !_wa.ctx) return Promise.reject("[WA] 未初始化");
     if (i < 0 || i >= state.sentences.length) return;
     var s = state.sentences[i];
+    _waUnlockAudio(); // 每次播放手势重设 iOS「锁 B」，确保后台返回/同步后也能出声
     state.lastIndex = i;
     state.playingIndex = i;
     state._hl = i;
@@ -1624,6 +1621,7 @@
   // 从暂停位置恢复播放
   function _waResume() {
     if (!_wa.buf || _wa.pausedAt == null) return;
+    _waUnlockAudio();
     var remaining = _wa.buf.duration - _wa.pausedAt;
     if (remaining <= 0) return;
 
@@ -1780,6 +1778,54 @@
     if (audio.readyState >= 1 && isFinite(audio.duration)) begin();
     else audio.addEventListener("loadedmetadata", begin, { once: true });
   }
+
+  // ── 从后台切回前台：恢复 Web Audio 引擎 ──
+  // iOS 独立 PWA 切到别的 App 再回来时：
+  //   ① AudioContext 会被 suspend/close，旧解码 buffer 失效；
+  //   ② Blob 对象的底层存储被系统释放，createObjectURL(旧Blob) 再 fetch 会报 WebKitBlobResource 错误；
+  //   ③ 所有 blob: URL 被吊销。
+  // 修复：回到前台即作废全部音频资源（引擎+blob+blob URL），下一次点击（手势内）从远程 URL 重新 fetch 解码。
+  function _waRecoverOnForeground() {
+    if (!_isMobile()) return;
+    var hadEngine = _wa.active || _wa.buf || _wa.ctx || state.audioBlob;
+    if (!hadEngine) return;
+
+    console.warn("[WA] 回到前台：作废旧音频引擎 + blob 资源，等待下次点击重建");
+
+    // 1) 清除 WA 引擎状态
+    _wa.active = false;
+    _wa.buf = null;
+    _wa._initPromise = null;
+    _wa.playing = false;
+    _wa.pausedAt = null;
+    _waStopProgressMonitor();
+    if (_wa.ctx) { try { _wa.ctx.close(); } catch (_) {} _wa.ctx = null; }
+
+    // 2) 清除失效的 audioBlob（iOS 后台释放了底层存储，再用会 WebKitBlobResource 错误）
+    state.audioBlob = null;
+
+    // 3) 处理 audioUrl：
+    //    - blob: URL → 已吊销，撤销并清除；同步重置 <audio>.src 防止用死 URL
+    //    - 远程 URL → 保留！playSentence 第三分支会在手势内重新 ensureLocalAudio（fresh fetch → 新 blob → _waInit）
+    if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
+      try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
+      state.audioUrl = null;
+      if (audio && audio.src && audio.src.startsWith("blob:")) {
+        audio.removeAttribute("src");
+        audio.load();
+      }
+    }
+    // 不弹 toast：回前台就弹太烦；用户点句时会自动静默重建，感知不到中断
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { if (_wa.playing) { try { _waPause(); } catch (_) {} } }
+    else _waRecoverOnForeground();
+  });
+  window.addEventListener("pageshow", function (e) {
+    // persisted=true 表示页面从后台/bfcache 恢复（iOS 独立 PWA 切回前台常触发）
+    if (e.persisted || document.visibilityState !== "hidden") _waRecoverOnForeground();
+  });
 
   function playSentence(i) {
     console.log("[playSentence] i=" + i + " | _isMobile=" + _isMobile() + " | _wa.active=" + _wa.active +
