@@ -883,6 +883,8 @@ Sync.mountAccountButton = function () {
       var html = "";
       // 同步按钮（始终显示，未登录时灰色禁用态）
       html += '<button class="nav-sync-btn" id="nav-sync-refresh" title="从云端拉取最新数据">🔄</button>';
+      // 页面刷新按钮（PWA 推到主屏后没有浏览器刷新按钮，用这个硬刷新拿最新代码）
+      html += '<button class="nav-sync-btn" id="nav-page-refresh" title="刷新页面（获取最新代码）">↻</button>';
       if (_user) {
         html += '<button class="nav-sync-acct on" title="已登录 · 点击查看"><span class="sync-dot"></span>' +
           (_user.email || "已登录") + " · 退出</button>";
@@ -922,6 +924,27 @@ Sync.mountAccountButton = function () {
           p.finally(reset);
           // 30 秒超时兜底：无论如何恢复按钮，避免卡在 ⏳
           setTimeout(reset, 30000);
+        });
+      }
+
+      // 页面刷新按钮事件：PWA 主屏无浏览器刷新入口，用这个硬刷新拿最新代码
+      // 设计依据：sw.js 对导航请求（HTML）不拦截，且 Cloudflare 对 HTML 设 no-cache，
+      // 因此原生 location.reload() 即取最新 index.html（无需清 SW 缓存）。
+      var refreshBtn = document.getElementById("nav-page-refresh");
+      if (refreshBtn) {
+        refreshBtn.addEventListener("click", function () {
+          if (window.toast) window.toast("🔄 正在刷新页面...");
+          // 双保险：若 SW 已激活，先触发 update（新版本 SW 会自动 skipWaiting 接管），再 reload
+          try {
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+              navigator.serviceWorker.getRegistration().then(function (reg) {
+                if (reg) { try { reg.update(); } catch (_) {} }
+                location.reload();
+              }).catch(function () { location.reload(); });
+            } else {
+              location.reload();
+            }
+          } catch (_) { location.reload(); }
         });
       }
 
