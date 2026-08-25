@@ -2372,15 +2372,33 @@
     if (!s) return "";
     return s.toLowerCase().trim().replace(/\s+/g, " ").replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, "");
   }
-  // 例句挖空：把目标词替换成等长的下划线
+  // 轻量英文词干提取：用于挖空卡「识别单词的其他形式」并精准挖空。
+  // 覆盖绝大多数常见变形（三单-s / 复数-s / 进行时-ing / 过去-ed / 比较-er/-est / 副词-ly / y→i 等），
+  // 零依赖、微秒级、覆盖率高。已知盲区：y 词干形容词（happy→happier）、以 ss/ll 等双写结尾的少数词。
+  function stemWord(s) {
+    s = (s || "").toLowerCase().trim();
+    if (!s) return "";
+    s = s.replace(/(ies)$/, "y")                 // varieties→variety, tries→try
+         .replace(/(ied)$/, "y")                 // studied→study, tried→try
+         .replace(/(ing|ed|er|est|ly)$/, "")     // figuring→figur, played→play, bigger→bigg
+         .replace(/(es)$/, "")                   // watches→watch, figures→figure
+         .replace(/(s)$/, "")                    // runs→run, figures→figure
+         .replace(/(e)$/, "");                   // figure→figur（对齐 ing 词干）
+    // 去双写尾辅音：running→runn→run, bigger→bigg→big
+    s = s.replace(/([b-df-hj-np-tv-z])\1$/, "$1");
+    return s;
+  }
+  // 例句挖空：按词边界扫描，凡词干与目标词词干相同者替换为等长下划线（保留原词大小写/长度）
   function clozeSentence(v) {
     var ex = v.example || "";
     var w = (v.word || "").trim();
     if (!ex || !w) return "";
-    var escaped = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    try {
-      return ex.replace(new RegExp(escaped, "gi"), function (m) { return "_".repeat(Math.max(3, m.length)); });
-    } catch (_) { return ex; }
+    var targetStem = stemWord(w);
+    if (!targetStem) return ex;
+    return ex.replace(/\b([A-Za-z][A-Za-z'’-]*)\b/g, function (m) {
+      if (stemWord(m.toLowerCase()) === targetStem) return "_".repeat(Math.max(3, m.length));
+      return m;
+    });
   }
   function classify(v) {
     if (isMastered(v)) return "mastered";
@@ -2730,11 +2748,21 @@
   }
 
   // 在例句文本中高亮目标词（用于挖空卡「揭示答案」）
+  // 揭示答案时高亮例句中的目标词（含其变形）：先转义防 XSS，再用占位符保护 HTML 实体，
+  // 按词边界扫描，词干命中则包裹高亮 span。
   function highlightWordInText(text, word) {
-    var escaped = (word || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    try {
-      return escapeHtml(text).replace(new RegExp(escaped, "gi"), function (m) { return '<span class="vocab-hl">' + m + "</span>"; });
-    } catch (_) { return escapeHtml(text); }
+    var w = (word || "").trim();
+    var targetStem = stemWord(w);
+    if (!targetStem) return escapeHtml(text);
+    var safe = escapeHtml(text);
+    var entities = [];
+    safe = safe.replace(/&[a-zA-Z]+;|&#\d+;/g, function (ent) { entities.push(ent); return "\u0001"; });
+    safe = safe.replace(/\b([A-Za-z][A-Za-z'’-]*)\b/g, function (m) {
+      if (stemWord(m.toLowerCase()) === targetStem) return '<span class="vocab-hl">' + m + "</span>";
+      return m;
+    });
+    safe = safe.replace(/\u0001/g, function () { return entities.shift(); });
+    return safe;
   }
 
   function reviewStageTxt(v, mode) {
