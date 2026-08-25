@@ -279,7 +279,7 @@
   #vocab-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,.45);
     -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
-    z-index: 40;
+    z-index: 110;
     opacity: 0; pointer-events: none; transition: opacity .2s;
   }
   #vocab-overlay.show { opacity: 1; pointer-events: auto; }
@@ -287,7 +287,7 @@
     position: fixed; top: 0; right: -420px; bottom: 0; width: 400px; max-width: 90vw;
     background: #fff; box-shadow: var(--shadow-3);
     border-left: 1px solid var(--border-hi);
-    z-index: 45; transition: right .3s var(--ease); display: flex; flex-direction: column;
+    z-index: 115; transition: right .3s var(--ease); display: flex; flex-direction: column;
   }
   #vocab-panel.open { right: 0; }
   #vocab-panel .vp-header {
@@ -330,7 +330,7 @@
   #lib-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,.45);
     -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
-    z-index: 40;
+    z-index: 110;
     opacity: 0; pointer-events: none; transition: opacity .2s;
   }
   #lib-overlay.show { opacity: 1; pointer-events: auto; }
@@ -338,7 +338,7 @@
     position: fixed; top: 0; right: -420px; bottom: 0; width: 400px; max-width: 90vw;
     background: #fff; box-shadow: var(--shadow-3);
     border-left: 1px solid var(--border-hi);
-    z-index: 45; transition: right .3s var(--ease); display: flex; flex-direction: column;
+    z-index: 115; transition: right .3s var(--ease); display: flex; flex-direction: column;
   }
   #lib-panel.open { right: 0; }
   #lib-panel .lib-item {
@@ -2511,29 +2511,67 @@
 
     // 建立 lowercased word -> 第一个匹配的 vocab 索引
     const map = {};
+    const multiMap = {}; // 多词短语（含空格）
     state.vocab.forEach(function (v, idx) {
       const w = (v.word || "").trim().toLowerCase();
-      if (w && !(w in map)) map[w] = idx;
+      if (!w) return;
+      if (w.indexOf(" ") !== -1) {
+        // 多词短语：存入 multiMap
+        if (!(w in multiMap)) multiMap[w] = idx;
+      } else {
+        if (!(w in map)) map[w] = idx;
+      }
     });
     const keys = Object.keys(map);
-    if (keys.length === 0) return escapeHtml(text);
+    const multiKeys = Object.keys(multiMap);
+    if (keys.length === 0 && multiKeys.length === 0) return escapeHtml(text);
 
-    // 按长度降序，长词优先（避免 "art" 抢在 "article" 前）
-    keys.sort(function (a, b) { return b.length - a.length; });
+    let html = escapeHtml(text);
 
-    // 用正则把文本切成「词」和「非词」片段，逐段处理
-    const tokens = text.split(/(\b[\w']+\b)/g);
-    let html = "";
-    for (let t = 0; t < tokens.length; t++) {
-      const tok = tokens[t];
-      if (tok === "") continue;
-      const low = tok.toLowerCase();
-      if (map[low] !== undefined) {
-        html += '<span class="vocab-hl" data-vid="' + map[low] + '">' + escapeHtml(tok) + "</span>";
-      } else {
-        html += escapeHtml(tok);
-      }
+    // 第一轮：多词短语匹配（按长度降序，长的优先，避免子串冲突）
+    multiKeys.sort(function (a, b) { return b.length - a.length; });
+    for (let mi = 0; mi < multiKeys.length; mi++) {
+      const phrase = multiKeys[mi];
+      const vid = multiMap[phrase];
+      // 转义正则特殊字符，然后做全局不区分大小写替换
+      const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try {
+        html = html.replace(new RegExp(escaped, "gi"), function (matched) {
+          return '<span class="vocab-hl" data-vid="' + vid + '">' + matched + "</span>";
+        });
+      } catch (_) { /* 无效正则（理论上不会） */ }
     }
+
+    // 第二轮：单词匹配（按长度降序）
+    keys.sort(function (a, b) { return b.length - a.length; });
+    if (keys.length > 0) {
+      // 把已有高亮的 span 保护起来，只对非高亮部分做单词匹配
+      const parts = html.split(/(<span[^>]*class="vocab-hl"[^>]*>.*?<\/span>)/gi);
+      const newParts = [];
+      for (let p = 0; p < parts.length; p++) {
+        const part = parts[p];
+        if (/<span[^>]*class="vocab-hl"/i.test(part)) {
+          newParts.push(part); // 已高亮，保留原样
+        } else {
+          // 对这段纯文本做单词级高亮
+          const tokens = part.split(/(\b[\w']+\b)/g);
+          let inner = "";
+          for (let t = 0; t < tokens.length; t++) {
+            const tok = tokens[t];
+            if (tok === "") continue;
+            const low = tok.toLowerCase();
+            if (map[low] !== undefined) {
+              inner += '<span class="vocab-hl" data-vid="' + map[low] + '">' + tok + "</span>";
+            } else {
+              inner += tok;
+            }
+          }
+          newParts.push(inner);
+        }
+      }
+      html = newParts.join("");
+    }
+
     return html;
   }
 
