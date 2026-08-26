@@ -1381,6 +1381,9 @@
         console.log("[ensureLocalAudio] ✓ 音频字节已缓存, 大小:", (ab.byteLength / 1024 / 1024).toFixed(1), "MB（WA 将按句懒解码）");
         _maybePredecodeWav();
         _probeDuration();
+        // ✅ 桌面后台整文件解码：完成后 _wa.buf 就绪，句子播放改为「精确时间 seek」（零字节估算偏移）。
+        //   仅桌面触发（移动端整文件解码 5-6 分钟 CPU 占用，不跑；移动仍走懒解码，已验证匹配）。
+        if (!_isWav(ab) && !_isMobile()) _waDecodeFull();
         return state.audioUrl;
       }).catch(function (err) {
         console.warn("[ensureLocalAudio] 第", attempt + 1, "/3 次失败:", err.message || err);
@@ -1655,11 +1658,45 @@
     toast("该句音频解码失败，无法播放（文件可能损坏或不被支持）");
   }
 
-  // 解码并播放第 i 句（统一入口：整文件 buffer 就绪则采样级定位，否则按句懒解码）
+  // 后台整文件解码：解码完成后 _wa.buf 就绪，句子播放改为「精确时间 seek」（零字节估算偏移）。
+  // 不阻塞首句播放（首句仍走懒解码兜底），桌面几秒完成，移动端后台慢慢解。
+  function _waDecodeFull() {
+    if (_wa.buf || _wa._fullDecoding || !state.audioArrayBuffer) return;
+    if (_isWav(state.audioArrayBuffer)) return; // WAV 已由 _maybePredecodeWav 处理
+    _wa._fullDecoding = true;
+    _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
+      _wa.buf = full; _wa.active = true; _wa._fullDecoding = false;
+      console.log("[WA] ✓ 整文件解码完成（精确时间模式就绪）, 时长:", full.duration.toFixed(1), "s");
+    }).catch(function (e) {
+      _wa._fullDecoding = false;
+      console.warn("[WA] 后台整文件解码失败（不影响懒解码兜底）:", e);
+    });
+  }
+
+  // 解码并播放第 i 句
+  //   优先级：① _wa.buf 已就绪 → 精确时间 seek（零偏移，用户要求「按分段上面的时间播」）
+  //           ② 桌面 → 整文件解码后精确播放（CPU 强，几秒完成，根除字节估算 2s 偏移）
+  //           ③ 移动 → 按句懒解码（已验证匹配，保持现状）
   function _waDecodeAndPlay(i) {
     if (i < 0 || i >= state.sentences.length) return;
-    if (_wa.active && _wa.buf) { _waPlaySentence(i); return; }
+    // ① 精确时间模式：buffer 就绪直接按 timestamp 定位
+    if (_wa.buf) { _waPlaySentence(i); return; }
     var s = state.sentences[i];
+    // ② 桌面：直接整文件解码后精确播放（避免懒解码字节估算偏移）
+    if (!_isMobile() && state.audioArrayBuffer && !_wa._fullDecoding) {
+      _wa._fullDecoding = true;
+      _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
+        _wa.buf = full; _wa.active = true; _wa._fullDecoding = false;
+        _waPlaySentence(i);                     // 精确 seek 到 s.start
+      }).catch(function (e) {
+        _wa._fullDecoding = false;
+        console.warn("[WA] 桌面整文件解码失败，回退懒解码:", e);
+        _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
+          .catch(function () { _waDecodeFail(i, e); });
+      });
+      return;
+    }
+    // ③ 移动 / 兜底：按句切片懒解码
     _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
       .catch(function (e) {
         console.warn("[WA] 切片解码失败，尝试整文件解码兜底:", e);
