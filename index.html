@@ -846,6 +846,7 @@
     _wa.buf = null;
     _wa._fullDecoding = false;
     _wa._pendingIndex = null;
+    if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
     _showDecodeLoading(false);
     _wa.curBuf = null;
     _wa.pausedAt = null;
@@ -1432,6 +1433,10 @@
     playStartOffset: 0, // 本次播放从音频的哪个偏移开始（秒）
     active: false,      // WA 引擎是否可用（有 ctx 且能解码/播放）
     rafId: null,        // requestAnimationFrame ID（用于模拟 timeupdate）
+    bridgeCheckId: null,// setInterval ID（<audio> 桥接播放的句子结束轮询）
+    unlockAt: 0,        // iOS 解锁 play() 的时间戳（区分解锁与真实整篇播放）
+    fullDecoding: false,// 是否正在后台整文件解码
+    pendingIndex: null, // 解码中用户最后点击的句子索引
   };
 
   function _isIOS() {
@@ -1685,46 +1690,71 @@
     });
   }
 
-  // 解码并播放第 i 句
-  //   优先级：① _wa.buf 已就绪 → 精确时间 seek（零偏移）
-  //           ② 全平台 → 整文件解码后精确播放（按需触发，非页面加载时触发）
-  //           ③ 解码进行中 → 排队等待，解码完成后自动播（不再掉进失败懒解码 + 报错 toast）
+  // 解码并播放第 i 句 —— 混合模式（解决手机解码慢）
+  //   ① _wa.buf 已就绪 → 精确时间 seek（零偏移）
+  //   ② buf 未就绪 → 立即用原生 <audio> 播放（秒出声！），同时后台触发整文件解码
+  //      解码完成后自动切换到精确模式，后续句子零偏移
+  //   ③ 解码进行中 → 继续用 <audio> 即时播（更新目标句），解码完切精确模式
   function _waDecodeAndPlay(i) {
     if (i < 0 || i >= state.sentences.length) return;
     // ① 精确时间模式：buffer 就绪直接按 timestamp 定位
     if (_wa.buf) { _waPlaySentence(i); return; }
     var s = state.sentences[i];
-    // ② 触发整文件解码（按需，用户手势内 AudioContext 已唤醒）
+    state.lastIndex = i;
+    state.playingIndex = i;
+    highlightCurrent(i);
+    syncToggleLabel(true);
+    // ②③ buf 未就绪 → 用原生 <audio> 即时播放（不等待解码！）
+    _playViaAudioBridge(s, i);
+    // 同时/继续后台解码（仅首次触发一次）
     if (state.audioArrayBuffer && !_wa._fullDecoding) {
       _wa._fullDecoding = true;
-      _wa._pendingIndex = i;                     // 记录本次请求的句子
-      _showDecodeLoading(true);                   // 显示「正在准备音频…」
+      console.log("[WA] 后台整文件解码启动…（当前用 <audio> 桥接播放）");
       _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
         _wa.buf = full; _wa.active = true; _wa._fullDecoding = false;
+        console.log("[WA] ✓ 整文件解码完成 → 切换到精确时间模式, 时长:", full.duration.toFixed(1), "s");
         _showDecodeLoading(false);
-        // 播放解码完成时用户最后请求的那句（可能用户在等待期间点了别的句）
-        var target = (_wa._pendingIndex != null) ? _wa._pendingIndex : i;
-        _wa._pendingIndex = null;
-        if (target < state.sentences.length) _waPlaySentence(target);
+        // 如果用户正在听 <audio> 桥接，不打断；下次点击自动走精确模式
       }).catch(function (e) {
         _wa._fullDecoding = false;
+        console.warn("[WA] 后台解码失败（继续用 <audio> 桥接）:", e);
         _showDecodeLoading(false);
-        console.warn("[WA] 整文件解码失败:", e);
-        _waDecodeFail(i, e);
       });
-      return;
     }
-    // ③ 整文件解码正在进行中 → 排队（更新目标句子，解码完成后自动播最新请求的那句）
-    if (_wa._fullDecoding && state.audioArrayBuffer) {
-      _wa._pendingIndex = i;                      // 更新为最新点击的句子
-      _showDecodeLoading(true);                    // 确保 loading 显示
-      return;                                      // 不掉进懒解码，不报错
-    }
-    // ④ 极端兜底：无字节可用
-    _waDecodeFail(i, new Error("无可用音频字节"));
   }
 
-  // 解码中的加载提示（替代之前「解码失败」的错误 toast）
+  // 原生 <audio> 桥接播放（buf 未就绪时的即时方案）
+  // 用 audio.currentTime=seek 到句子起点，浏览器原生 MP3 seek 是毫秒级
+  function _playViaAudioBridge(s, i) {
+    if (!audio || !audio.src) return;
+    // 停掉之前的桥接轮询
+    if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
+    state.fullPlay = false;
+    // 确保 audio 可用
+    audio.muted = false;
+    // Seek 到句子精确起点 + 播放
+    try { audio.currentTime = Math.max(0, s.start); } catch (_) {}
+    var pr = audio.play();
+    if (pr && pr.catch) pr.catch(function (e) {
+      console.warn("[audio 桥接] play() 被拦截:", e);
+      toast("请先点击页面任意位置再试");
+      syncToggleLabel(false);
+    });
+    // 轮询检测句子结束（比 timeupdate 更可靠控制结束点）
+    var sentenceEnd = s.start + s.duration;
+    _wa._bridgeCheckId = setInterval(function () {
+      if (!audio || audio.paused || audio.currentTime >= sentenceEnd) {
+        if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
+        if (audio && !audio.paused && audio.currentTime >= sentenceEnd) {
+          audio.pause();
+          syncToggleLabel(false);
+          console.log("[audio 桥接] 句子", i, "播放完毕 (", s.text.slice(0, 20), "…)");
+        }
+      }
+    }, 80);  // 80ms 轮询，精度足够且省电
+  }
+
+  // 解码中的加载提示（保留用于极端情况）
   function _showDecodeLoading(show) {
     var el = document.getElementById("wa-decode-loading");
     if (show) {
@@ -1918,6 +1948,7 @@
       try { _wa.src.stop(); } catch (_) {}
       _wa.src = null;
     }
+    if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
     _wa.playing = false;
     _wa.pausedAt = null;
     _wa.curBuf = null;
@@ -2053,6 +2084,7 @@
     _wa.buf = null;
     _wa._fullDecoding = false;
     _wa._pendingIndex = null;
+    if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
     _showDecodeLoading(false);
     _wa.curBuf = null;
     _wa._initPromise = null;
