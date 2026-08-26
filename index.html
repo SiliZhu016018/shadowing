@@ -1452,12 +1452,16 @@
     if (!_isIOS() || !audio) return;
     if (!audio.paused) return;
     _wa._unlockAt = Date.now(); // 标记本次为 iOS 解锁播放（供 timeupdate/play 监听区分真实整篇播放）
+    var wasMuted = audio.muted;
     var _done = false;
     function _stop() {
       if (_done) return;
       _done = true;
-      try { audio.pause(); audio.currentTime = 0; } catch (_) {}
+      try { audio.pause(); audio.currentTime = 0; audio.muted = wasMuted; } catch (_) {}
     }
+    // ⚠️ 解锁期间静音：<audio>.play() 会用整段音频文件从 0 秒播出来激活子系统，
+    //    静音后用户听不到这 200ms 的「整段开头」，但解锁效果不受影响。
+    try { audio.muted = true; } catch (_) {}
     var p = audio.play();
     if (p && p.then) p.then(_stop).catch(_stop);
     else _stop();
