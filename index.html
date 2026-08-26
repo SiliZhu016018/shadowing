@@ -1476,8 +1476,10 @@
       } catch (e) { reject(e); return; }
       function go() {
         try {
-          // ✅ 回调风格 decodeAudioData（Promise 风格在 iOS Safari 上会挂起不执行）
-          _wa.ctx.decodeAudioData(bytes,
+          // ⚠️ decodeAudioData 会 transfer/detach ArrayBuffer（Web Audio API 规范行为），
+          //    必须先拷贝一份传入，否则原始 state.audioArrayBuffer 失效导致后续切片解码全部崩溃
+          var buf = bytes.slice(0);
+          _wa.ctx.decodeAudioData(buf,
             function onOk(d) { resolve(d); },
             function onErr(err) { reject(err || new Error("decodeAudioData failed")); }
           );
