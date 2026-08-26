@@ -831,6 +831,15 @@
       toast("sentences.json 格式不正确"); return;
     }
     state.meta = jsonObj.meta || {};
+    // ✅ 加载新材料时重置音频/WA 状态，避免沿用上一份材料的压缩字节或时长（否则按句切片会串味甚至整文件兜底播错音频）
+    state.audioArrayBuffer = null;
+    state.audioDuration = 0;
+    state.audioBlob = null;
+    _wa.active = false;
+    _wa.buf = null;
+    _wa.curBuf = null;
+    _wa.pausedAt = null;
+    _wa.playing = false;
     // 把顶层 title 并入 meta，确保保存回本地/云端时 title 一致（materialId 统一基于 title，跨设备 key 才能对齐）
     if (jsonObj.title) state.meta.title = jsonObj.title;
     if (!state.meta.title && jsonObj.id) state.meta.title = jsonObj.id;
@@ -1304,19 +1313,31 @@
   //   4. 优雅降级：重试全失败时 &lt;audio&gt; 仍可播放（公开 URL 不过期），只是 iOS seek 不太准
   // ─────────────────────────────────────────────────────────────────────────────
   function ensureLocalAudio(remoteUrl) {
-    // 已经是本地 blob / data URI → 直接用
+    // 已经是本地 blob / data URI → 直接用，并即时取时长
     if (!remoteUrl || remoteUrl.startsWith("blob:") || remoteUrl.startsWith("data:")) {
       if (remoteUrl) { audio.src = remoteUrl; state.audioUrl = remoteUrl; }
+      _probeDuration();
+      // blob/data URL 也要取压缩字节（供 WA 按句懒解码，否则只走 <audio> 兜底）
+      if (remoteUrl && (remoteUrl.startsWith("blob:") || remoteUrl.startsWith("data:")) && !state.audioArrayBuffer) {
+        fetch(remoteUrl).then(function (r) { if (!r.ok) throw 0; return r.arrayBuffer(); })
+          .then(function (ab) {
+            state.audioArrayBuffer = ab;
+            console.log("[ensureLocalAudio] ✓ 本地字节已缓存", (ab.byteLength / 1048576).toFixed(1), "MB");
+            _probeDuration();
+          }).catch(function () {});
+      }
       return Promise.resolve(remoteUrl);
     }
     // 已在后台下载中 → 复用
     if (_audioLoading) return _audioLoading;
 
-    // ✅ 第一步：立即设 src（页面秒开，&lt;audio&gt; 立即可播）
+    // ✅ 第一步：立即设 src（页面秒开，&lt;audio&gt; 立即可播 / iOS 解锁用）
     audio.src = remoteUrl;
     state.audioUrl = remoteUrl;
+    _probeDuration();
 
-    // 第二步：后台下载 blob（成功后静默切换到精确模式）
+    // 第二步：后台下载，把【压缩字节】常驻内存（WA 按句切片懒解码的原材料，
+    //   不再整文件 decodeAudioData，根除手机上 5-6 分钟的整文件解码卡顿）
     _audioLoading = (function _tryFetch(attempt) {
       if (attempt >= 3) {
         _audioLoading = null;
@@ -1340,18 +1361,14 @@
         state.audioBlob = blob;
         state.audioUrl = objUrl;
         audio.src = objUrl; // 静默切换：用户无感知
+        // ✅ 关键：把压缩字节常驻内存，供 WA 按句切片懒解码（不再整文件 decodeAudioData）
+        return blob.arrayBuffer();
+      }).then(function (ab) {
+        state.audioArrayBuffer = ab;
         _audioLoading = null;
-        console.log("[ensureLocalAudio] ✓ blob 已就绪, 大小:", (blob.size / 1024 / 1024).toFixed(1), "MB");
-
-        // 移动端：blob 到达后自动初始化 WA 精确引擎（用户下次点击即走采样级定位）
-        if (_isMobile() && !_wa.active && !_wa._initPromise) {
-          console.log("[ensureLocalAudio] blob 就绪，自动初始化 WA 引擎...");
-          _waInit(state.audioBlob).catch(function (e) {
-            console.warn("[ensureLocalAudio] WA 自动初始化失败:", e);
-          });
-        }
-
-        return objUrl;
+        console.log("[ensureLocalAudio] ✓ 音频字节已缓存, 大小:", (ab.byteLength / 1024 / 1024).toFixed(1), "MB（WA 将按句懒解码）");
+        _probeDuration();
+        return state.audioUrl;
       }).catch(function (err) {
         console.warn("[ensureLocalAudio] 第", attempt + 1, "/3 次失败:", err.message || err);
         return _tryFetch(attempt + 1);
@@ -1359,6 +1376,16 @@
     })(0);
 
     return _audioLoading;
+  }
+
+  // 从 <audio> 元数据即时获取总时长（无需解码），供 WA 单句切片做「时间→字节」估算
+  function _probeDuration() {
+    function set() { if (isFinite(audio.duration) && audio.duration > 0) state.audioDuration = audio.duration; }
+    set();
+    if (audio.addEventListener && !audio._durHandler) {
+      audio._durHandler = set;
+      audio.addEventListener("loadedmetadata", set);
+    }
   }
   // 挂到 window：确保模块脚本（<script type="module">）也能调用
   // 模块脚本有独立作用域，无法直接访问普通脚本里的函数
@@ -1375,13 +1402,15 @@
   // ─────────────────────────────────────────────────────────────────────────────
   var _wa = {
     ctx: null,          // AudioContext
-    buf: null,          // 解码后的 AudioBuffer（全文一次解码）
+    buf: null,          // 解码后的整文件 AudioBuffer（仅切片解码失败时的兜底）
+    curBuf: null,       // 当前句切片解码出的小 AudioBuffer（懒解码主路径）
+    curStart: 0,        // 当前切片在全音频中的起始秒数
     src: null,          // 当前正在播放的 AudioBufferSourceNode
     playing: false,
-    pausedAt: null,     // 暂停时的精确偏移（秒）
+    pausedAt: null,     // 暂停时的精确偏移（秒，全音频时间基准）
     playStartCtxTime: 0,// 本次播放开始的 audioContext.currentTime
     playStartOffset: 0, // 本次播放从音频的哪个偏移开始（秒）
-    active: false,      // 是否已激活（检测到 iOS / 移动端才激活）
+    active: false,      // WA 引擎是否可用（有 ctx 且能解码/播放）
     rafId: null,        // requestAnimationFrame ID（用于模拟 timeupdate）
   };
 
@@ -1418,74 +1447,55 @@
   // ⚠️ iOS 关键注意：
   //   1) decodeAudioData 必须用【回调风格】，Promise 风格在 iOS Safari 上会挂起不执行
   //   2) AudioContext 必须在【用户手势】内创建/恢复，否则 resume() 被静默忽略
+  // 通用：把一段音频字节（ArrayBuffer）解码为 AudioBuffer（iOS 兼容的回调风格）
+  function _waDecodeBytes(bytes) {
+    return new Promise(function (resolve, reject) {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) { reject("[WA] 浏览器不支持 AudioContext"); return; }
+      try {
+        if (_wa.ctx && _wa.ctx.state === "closed") { try { _wa.ctx.close(); } catch (_) {} _wa.ctx = null; }
+        if (!_wa.ctx) _wa.ctx = new Ctx();
+      } catch (e) { reject(e); return; }
+      function go() {
+        try {
+          // ✅ 回调风格 decodeAudioData（Promise 风格在 iOS Safari 上会挂起不执行）
+          _wa.ctx.decodeAudioData(bytes,
+            function onOk(d) { resolve(d); },
+            function onErr(err) { reject(err || new Error("decodeAudioData failed")); }
+          );
+        } catch (e) { reject(e); }
+      }
+      if (_wa.ctx.state === "suspended") {
+        var pr = _wa.ctx.resume ? _wa.ctx.resume() : null;
+        if (pr && pr.then) pr.then(go).catch(go); else go();
+      } else { go(); }
+    });
+  }
+
+  // 整文件解码（仅作为按句切片解码失败时的兜底；平时不调用，避免 5-6 分钟卡顿）
   function _waInit(blobOrUrl) {
     if (_wa.ctx && _wa.buf && _wa.active) return Promise.resolve();
-    if (_wa._initPromise) return _wa._initPromise; // 防并发重复初始化
+    if (_wa._initPromise) return _wa._initPromise;
+    var ab = (blobOrUrl instanceof ArrayBuffer) ? blobOrUrl : null;
+    var fetchUrl = (!ab && typeof blobOrUrl === "string") ? blobOrUrl :
+                   (!ab && blobOrUrl instanceof Blob) ? URL.createObjectURL(blobOrUrl) : null;
+    if (!ab && !fetchUrl) return Promise.reject("[WA] 无有效音频源");
 
-    var fetchUrl = (typeof blobOrUrl === "string") ? blobOrUrl :
-                   (blobOrUrl instanceof Blob) ? URL.createObjectURL(blobOrUrl) : null;
-    if (!fetchUrl) return Promise.reject("[WA] 无有效音频源");
-
-    console.log("[WA] 正在初始化 Web Audio 引擎（", _isIOS() ? "iOS" : "桌面", "）...");
-
+    console.log("[WA] 整文件解码（兜底路径，", _isIOS() ? "iOS" : "桌面", "）...");
     _wa._initPromise = new Promise(function (resolve, reject) {
-      // 1) 取音频二进制
-      fetch(fetchUrl).then(function (res) {
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.arrayBuffer();
-      }).then(function (ab) {
-        var Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) { reject("[WA] 浏览器不支持 AudioContext"); return; }
-
-        // 2) 创建 AudioContext（应在用户手势内）；若旧 ctx 已被 iOS 关闭则先丢弃重建
-        try {
-          if (_wa.ctx && _wa.ctx.state === "closed") { try { _wa.ctx.close(); } catch (_) {} _wa.ctx = null; }
-          if (!_wa.ctx) _wa.ctx = new Ctx();
-        } catch (e) { reject(e); return; }
-
-        // 3) 确保上下文已运行（suspended → resume），再解码
-        // 3.5) ✅ iOS 双层解锁：锁 A=AudioContext.resume（下面 doDecode 前处理）；
-        //      锁 B=<audio> 必须在用户手势内 play 过一次（见 _waUnlockAudio，每次播放手势调用）。
-        _waUnlockAudio();
-
-        function doDecode() {
-          // ✅ 回调风格 decodeAudioData（iOS 兼容）
-          try {
-            _wa.ctx.decodeAudioData(ab,
-              function onOk(decoded) {
-                _wa.buf = decoded;
-                _wa.active = true;
-                _wa._initPromise = null;
-                console.log("[WA] ✓ 解码完成, 时长:", decoded.duration.toFixed(1), "s, 采样率:", decoded.sampleRate, "Hz");
-                resolve();
-              },
-              function onErr(err) {
-                console.warn("[WA] decodeAudioData 失败:", err);
-                _wa.active = false;
-                _wa._initPromise = null;
-                reject(err || new Error("decodeAudioData failed"));
-              }
-            );
-          } catch (e) {
-            console.warn("[WA] decodeAudioData 同步异常:", e);
-            _wa.active = false;
-            _wa._initPromise = null;
-            reject(e);
-          }
-        }
-
-        if (_wa.ctx.state === "suspended") {
-          // resume 可能返回 Promise（标准）或 undefined（旧 Safari），两种都处理
-          var pr = _wa.ctx.resume ? _wa.ctx.resume() : null;
-          if (pr && pr.then) pr.then(doDecode).catch(doDecode);
-          else doDecode();
-        } else {
-          doDecode();
-        }
-      }).catch(function (err) {
-        _wa._initPromise = null;
-        console.warn("[WA] 初始化失败:", err);
-        reject(err);
+      function getBytes(done) {
+        if (ab) { done(ab); return; }
+        fetch(fetchUrl).then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.arrayBuffer();
+        }).then(done).catch(reject);
+      }
+      getBytes(function (bytes) {
+        _waDecodeBytes(bytes).then(function (decoded) {
+          _wa.buf = decoded; _wa.active = true; _wa._initPromise = null;
+          console.log("[WA] ✓ 整文件解码完成, 时长:", decoded.duration.toFixed(1), "s");
+          resolve();
+        }).catch(function (e) { _wa._initPromise = null; _wa.active = false; reject(e); });
       });
     });
 
@@ -1502,6 +1512,97 @@
                             : _wa._initPromise.then(function () { clearTimeout(timeout); }, function () { clearTimeout(timeout); });
 
     return _wa._initPromise;
+  }
+
+  // 在压缩字节中按帧同步字（MP3 / ADTS AAC）对齐到帧边界，保证切片可被独立解码
+  function _alignFrameSync(ab, pos, dir) {
+    var u = new Uint8Array(ab);
+    var lo = Math.max(0, pos - 8192), hi = Math.min(u.length - 1, pos + 8192);
+    if (dir < 0) {
+      for (var i = Math.min(pos, u.length - 1); i >= lo; i--) {
+        if (u[i] === 0xFF && (u[i + 1] & 0xE0) === 0xE0) return i;
+      }
+      // 向前找不到 → 退而求其次，向后找最近帧头
+      for (var i2 = pos; i2 <= hi; i2++) {
+        if (u[i2] === 0xFF && (u[i2 + 1] & 0xE0) === 0xE0) return i2;
+      }
+      return -1;
+    }
+    for (var j = pos; j <= hi; j++) {
+      if (u[j] === 0xFF && (u[j + 1] & 0xE0) === 0xE0) return j;
+    }
+    // 向后找不到（pos 已接近 EOF，如最后一句话）→ 向前找最近帧头作为切片尾
+    for (var k = Math.min(pos, u.length - 1); k >= Math.max(0, pos - 8192); k--) {
+      if (u[k] === 0xFF && (u[k + 1] & 0xE0) === 0xE0) return k;
+    }
+    return -1;
+  }
+
+  // 按句懒解码：只解码当前句对应的压缩字节切片（几十 KB，亚秒级），
+  //   彻底绕开整文件 decodeAudioData 的 5-6 分钟卡顿。失败则整文件解码兜底。
+  function _waDecodeSentence(s) {
+    return new Promise(function (resolve, reject) {
+      var ab = state.audioArrayBuffer;
+      var dur = state.audioDuration || (_wa.buf && _wa.buf.duration) || 0;
+      if (!ab || !dur) { reject("缺少压缩字节或时长，无法切片"); return; }
+      var bps = ab.byteLength / dur;            // 字节/秒（CBR 精确，VBR 近似）
+      var start = s.start || 0;
+      var end = (s.end != null) ? s.end : dur;
+      var b0 = Math.max(0, Math.floor(start * bps));
+      var b1 = Math.min(ab.byteLength, Math.ceil(end * bps));
+      b0 = _alignFrameSync(ab, b0, -1);          // 向前对齐到帧头
+      b1 = _alignFrameSync(ab, b1, +1);          // 向后对齐到帧头（作为切片尾，保证末帧完整）
+      if (b0 < 0 || b1 <= b0) { reject("帧对齐失败"); return; }
+      var slice = ab.slice(b0, b1);
+      _waDecodeBytes(slice).then(resolve).catch(function (e) {
+        console.warn("[WA] 单句切片解码失败，整文件解码兜底:", e);
+        if (!state.audioArrayBuffer) { reject(e); return; }
+        _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
+          _wa.buf = full; _wa.active = true; resolve(full);
+        }).catch(reject);
+      });
+    });
+  }
+
+  // 播放单句切片 buffer（从 0 播整段），进度基准对齐到全音频时间，便于高亮/停止判定
+  function _waPlaySlice(buf, s, i) {
+    _waStop();
+    _waUnlockAudio();
+    if (!_wa.ctx) { try { _wa.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { console.warn(e); return; } }
+    if (_wa.ctx.state === "suspended") { try { _wa.ctx.resume(); } catch (_) {} }
+    _wa.curBuf = buf;
+    _wa.curStart = s.start || 0;
+    _wa.src = _wa.ctx.createBufferSource();
+    _wa.src.buffer = buf;
+    _wa.src.playbackRate.value = state.rate;
+    _wa.src.connect(_wa.ctx.destination);
+    _wa.playStartOffset = _wa.curStart;          // 全音频时间基准
+    _wa.playStartCtxTime = _wa.ctx.currentTime;
+    _wa.playing = true;
+    _wa.pausedAt = null;
+    _wa.active = true;
+    state.playingIndex = i;
+    state._hl = i;
+    highlight(i); syncPlayIcons();
+    try { _wa.src.start(0, 0, buf.duration); }
+    catch (e) { console.warn("[WA] slice start 异常:", e); _wa.playing = false; return; }
+    _waStartProgressMonitor();
+    _wa.src.onended = function () {
+      _wa.src = null; _wa.playing = false; _waStopProgressMonitor();
+      var done = i; state.playingIndex = null; state._hl = null; highlight(null); syncPlayIcons();
+      markPlayed(done);
+      if (state.loop) _waDecodeAndPlay(done);
+      else if (state.autoAdvance) _waDecodeAndPlay(done + 1);
+    };
+  }
+
+  // 解码并播放第 i 句（统一入口：整文件 buffer 就绪则采样级定位，否则按句懒解码）
+  function _waDecodeAndPlay(i) {
+    if (i < 0 || i >= state.sentences.length) return;
+    if (_wa.active && _wa.buf) { _waPlaySentence(i); return; }
+    var s = state.sentences[i];
+    _waDecodeSentence(s).then(function (buf) { _waPlaySlice(buf, s, i); })
+      .catch(function (e) { console.warn("[WA] 解码失败，回退 <audio>:", e); _playSentenceByAudio(i); });
   }
 
   // 从指定句子索引开始播放（采样级精确定位）
@@ -1618,40 +1719,51 @@
     console.log("[WA] 暂停于", _wa.pausedAt.toFixed(3), "s");
   }
 
-  // 从暂停位置恢复播放
+  // 从暂停位置恢复播放（支持整文件 buffer 与单句切片两种模式）
   function _waResume() {
-    if (!_wa.buf || _wa.pausedAt == null) return;
+    if (_wa.pausedAt == null) return;
     _waUnlockAudio();
-    var remaining = _wa.buf.duration - _wa.pausedAt;
-    if (remaining <= 0) return;
-
-    var offset = _wa.pausedAt;
-    var dur = remaining / state.rate;
-
-    function doStart() {
-      _wa.src = _wa.ctx.createBufferSource();
-      _wa.src.buffer = _wa.buf;
-      _wa.src.playbackRate.value = state.rate;
-      _wa.src.connect(_wa.ctx.destination);
-
-      _wa.playStartOffset = offset;
-      _wa.playStartCtxTime = _wa.ctx.currentTime;
-      _wa.pausedAt = null;
-      _wa.playing = true;
-
-      try { _wa.src.start(0, offset, dur); } catch (e) { console.warn("[WA] resume start() 异常:", e); return; }
-      _waStartProgressMonitor();
-
-      _wa.src.onended = function () { _wa.src = null; _wa.playing = false; _waStopProgressMonitor(); };
-      console.log("[WA] 恢复于", offset.toFixed(3), "s");
-    }
-
-    if (_wa.ctx.state === "suspended") {
-      var pr = _wa.ctx.resume();
-      if (pr && pr.then) pr.then(doStart).catch(doStart);
-      else doStart();
-    } else {
-      doStart();
+    if (_wa.buf) {
+      var remaining = _wa.buf.duration - _wa.pausedAt;
+      if (remaining <= 0) return;
+      var offset = _wa.pausedAt;
+      var dur = remaining / state.rate;
+      function doStartFull() {
+        _wa.src = _wa.ctx.createBufferSource();
+        _wa.src.buffer = _wa.buf;
+        _wa.src.playbackRate.value = state.rate;
+        _wa.src.connect(_wa.ctx.destination);
+        _wa.playStartOffset = offset;
+        _wa.playStartCtxTime = _wa.ctx.currentTime;
+        _wa.pausedAt = null;
+        _wa.playing = true;
+        try { _wa.src.start(0, offset, dur); } catch (e) { console.warn("[WA] resume start() 异常:", e); return; }
+        _waStartProgressMonitor();
+        _wa.src.onended = function () { _wa.src = null; _wa.playing = false; _waStopProgressMonitor(); };
+        console.log("[WA] 恢复于", offset.toFixed(3), "s");
+      }
+      if (_wa.ctx.state === "suspended") { var pr = _wa.ctx.resume(); if (pr && pr.then) pr.then(doStartFull).catch(doStartFull); else doStartFull(); }
+      else doStartFull();
+    } else if (_wa.curBuf) {
+      var offInSlice = _wa.pausedAt - (_wa.curStart || 0);
+      var remInSlice = _wa.curBuf.duration - offInSlice;
+      if (remInSlice <= 0) return;
+      function doStartSlice() {
+        _wa.src = _wa.ctx.createBufferSource();
+        _wa.src.buffer = _wa.curBuf;
+        _wa.src.playbackRate.value = state.rate;
+        _wa.src.connect(_wa.ctx.destination);
+        _wa.playStartOffset = _wa.pausedAt;
+        _wa.playStartCtxTime = _wa.ctx.currentTime;
+        _wa.pausedAt = null;
+        _wa.playing = true;
+        try { _wa.src.start(0, offInSlice, remInSlice); } catch (e) { console.warn("[WA] resume(slice) 异常:", e); return; }
+        _waStartProgressMonitor();
+        _wa.src.onended = function () { _wa.src = null; _wa.playing = false; _waStopProgressMonitor(); };
+        console.log("[WA] 切片恢复于", _wa.pausedAt.toFixed(3), "s (within slice)");
+      }
+      if (_wa.ctx.state === "suspended") { var pr2 = _wa.ctx.resume(); if (pr2 && pr2.then) pr2.then(doStartSlice).catch(doStartSlice); else doStartSlice(); }
+      else doStartSlice();
     }
   }
 
@@ -1700,8 +1812,8 @@
       }
     }
     if (hl !== state._hl) { state._hl = hl; highlight(hl); }
-    // 更新 <audio> 的 currentTime 显示（进度条等 UI 可能读取它）
-    // 注意：这是只写不触发的——不会真的触发 <audio> 的 timeupdate 事件
+    // 用模拟的 currentTime(t) 驱动句子高亮；WA 模式下 <audio> 不参与播放，故不写 audio.currentTime
+    // （否则反而会用错的 currentTime 干扰高亮逻辑）。
   }
 
   // 试听区间（previewRange）的 WA 版本
@@ -1787,14 +1899,15 @@
   // 修复：回到前台即作废全部音频资源（引擎+blob+blob URL），下一次点击（手势内）从远程 URL 重新 fetch 解码。
   function _waRecoverOnForeground() {
     if (!_isMobile()) return;
-    var hadEngine = _wa.active || _wa.buf || _wa.ctx || state.audioBlob;
+    var hadEngine = _wa.active || _wa.buf || _wa.ctx || state.audioBlob || state.audioArrayBuffer;
     if (!hadEngine) return;
 
-    console.warn("[WA] 回到前台：作废旧音频引擎 + blob 资源，等待下次点击重建");
+    console.warn("[WA] 回到前台：作废旧 WA 引擎 + URL，从已缓存字节静默重建");
 
-    // 1) 清除 WA 引擎状态
+    // 1) 清除 WA 引擎状态（切片缓冲一并清掉，下次点击重新懒解码）
     _wa.active = false;
     _wa.buf = null;
+    _wa.curBuf = null;
     _wa._initPromise = null;
     _wa.playing = false;
     _wa.pausedAt = null;
@@ -1804,9 +1917,7 @@
     // 2) 清除失效的 audioBlob（iOS 后台释放了底层存储，再用会 WebKitBlobResource 错误）
     state.audioBlob = null;
 
-    // 3) 处理 audioUrl：
-    //    - blob: URL → 已吊销，撤销并清除；同步重置 <audio>.src 防止用死 URL
-    //    - 远程 URL → 保留！playSentence 第三分支会在手势内重新 ensureLocalAudio（fresh fetch → 新 blob → _waInit）
+    // 3) 旧 blob: URL 已吊销 → 撤销并清除
     if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
       try { URL.revokeObjectURL(state.audioUrl); } catch (_) {}
       state.audioUrl = null;
@@ -1814,6 +1925,18 @@
         audio.removeAttribute("src");
         audio.load();
       }
+    }
+    // 4) ✅ 压缩字节（state.audioArrayBuffer）仍在内存，用它们重建 blob URL，
+    //    保证「切片解码失败 → 回退 <audio>」这条安全网在前台恢复后依然可用；
+    //    而正常路径（点句 → 按句懒解码）直接读内存字节，无需任何网络。
+    if (state.audioArrayBuffer && !state.audioUrl) {
+      try {
+        var reb = new Blob([state.audioArrayBuffer]);
+        var reUrl = URL.createObjectURL(reb);
+        state.audioBlob = reb;
+        state.audioUrl = reUrl;
+        audio.src = reUrl;
+      } catch (_) {}
     }
     // 不弹 toast：回前台就弹太烦；用户点句时会自动静默重建，感知不到中断
   }
@@ -1828,50 +1951,24 @@
   });
 
   function playSentence(i) {
-    console.log("[playSentence] i=" + i + " | _isMobile=" + _isMobile() + " | _wa.active=" + _wa.active +
-      " | _wa.buf=" + !!_wa.buf + " | _wa._initPromise=" + !!_wa._initPromise +
-      " | audioBlob=" + !!state.audioBlob);
+    console.log("[playSentence] i=" + i + " | _wa.active=" + _wa.active +
+      " | _wa.buf=" + !!_wa.buf + " | audioArrayBuffer=" + !!state.audioArrayBuffer);
     if (i < 0 || i >= state.sentences.length) return;
-    const s = state.sentences[i];
+    var s = state.sentences[i];
     state.lastIndex = i;
-    // ── iOS / 移动端：优先 Web Audio API 精确引擎，降级 &lt;audio&gt; ──
-    if (_isMobile()) {
-      audio.playbackRate = state.rate; // 同步 rate（UI 显示用）
-      // ✅ 最佳路径：WA 引擎已就绪（blob 已解码）
-      if (_wa.active && _wa.buf) {
-        return _waPlaySentence(i);
-      }
-      // ✅ blob 已下载但 WA 尚未初始化 → 触发初始化
-      if (state.audioBlob && !_wa._initPromise) {
-        _waInit(state.audioBlob).then(function () {
-          _waPlaySentence(i);
-        }).catch(function (e) {
-          console.warn("[WA] 初始化失败，回退 <audio>:", e);
-          _wa.active = false;
-          _wa._initPromise = null;
-          _playSentenceByAudio(i);
-        });
-        return;
-      }
-      // ✅ blob 还在后台下载中（或重试中）→ 先用 <audio> 播，blob 到达后自动升级到 WA
-      if (state.audioUrl && !_wa._initPromise) {
-        // 确保后台下载已在进行（若尚未开始则触发）
-        if (!_audioLoading && state.audioUrl && !state.audioUrl.startsWith("blob:")) {
-          ensureLocalAudio(state.audioUrl).catch(function () {});
-        }
-        _playSentenceByAudio(i);
-        return;
-      }
-      // 正在初始化中（_wa._initPromise 存在且未拒绝）：等它完成会自动播放当前句
-      if (_wa._initPromise && _wa._initPromise.then) {
-        _wa._initPromise.then(function () { _waPlaySentence(i); })
-                        .catch(function () { _playSentenceByAudio(i); });
-        return;
-      }
-      // 无 blob（极端情况）：直接走 <audio>
-      return _playSentenceByAudio(i);
+    // ── 单引擎：所有平台（桌面 + 移动）统一走 Web Audio 精确播放 ──
+    // 1) 整文件 buffer 已就绪（切片解码失败后的兜底）→ 采样级定位播放
+    if (_wa.active && _wa.buf) { return _waPlaySentence(i); }
+    // 2) 压缩字节已缓存 → 按句懒解码（亚秒级），彻底跳过整文件 decodeAudioData
+    if (state.audioArrayBuffer) {
+      state.playingIndex = i; state._hl = i; highlight(i); syncPlayIcons();
+      _waUnlockAudio();
+      _waDecodeSentence(s).then(function (buf) { _waPlaySlice(buf, s, i); })
+        .catch(function (e) { console.warn("[WA] 单句解码失败，回退 <audio>:", e); _playSentenceByAudio(i); });
+      return;
     }
-    // ── 桌面端：使用 <audio> 元素 + seekAndPlay ──
+    // 3) 尚未缓存字节（极少）：触发后台拉取，先用 <audio> 播，字节到达后下次点击走 WA
+    if (state.audioUrl && !_audioLoading) ensureLocalAudio(state.audioUrl).catch(function () {});
     _playSentenceByAudio(i);
   }
 
@@ -1887,6 +1984,7 @@
     state.lastIndex = i;
     state.playingIndex = i;
     state._hl = i;
+    _wa.active = false; // 走 <audio> 安全网时关闭 WA 标记，让 timeupdate 正常驱动高亮
     audio.playbackRate = state.rate;
     highlight(i);
     syncPlayIcons();
@@ -1904,7 +2002,7 @@
       if (_wa.playing) { _waPause(); return; }
       if (_wa.pausedAt != null) { _waResume(); return; }
       // WA 模式下不播也不暂停 → 播放最后一句
-      _waPlaySentence(state.lastIndex);
+      _waDecodeAndPlay(state.lastIndex);
       return;
     }
     // ── <audio> 模式（桌面）──
