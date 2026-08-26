@@ -140,27 +140,7 @@
   audio { width: 100%; margin: 0; border-radius: var(--radius); }
   .player-sticky {
     padding: 4px 0 2px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
   }
-  .btn-play-all {
-    flex: 0 0 auto;
-    border: none;
-    border-radius: 999px;
-    padding: 8px 16px;
-    font-size: 14px;
-    font-weight: 700;
-    color: #fff;
-    background: linear-gradient(135deg, #3b82f6, #6366f1);
-    box-shadow: 0 2px 8px rgba(59,130,246,0.35);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: transform .08s ease, filter .15s ease;
-  }
-  .btn-play-all:hover { filter: brightness(1.06); }
-  .btn-play-all:active { transform: scale(0.97); }
   .player-sticky audio {
     flex: 1 1 220px;
     min-width: 200px;
@@ -628,7 +608,6 @@
   <p class="material-title hidden" id="material-title"></p>
 
   <div class="player-sticky">
-    <button id="btn-play-all" class="btn-play-all" title="从头连续播放整篇文章（点任意句可随时切回分句精听）">▶ 播放全文</button>
     <audio id="audio" controls preload="metadata"></audio>
   </div>
   </div>
@@ -861,6 +840,7 @@
     // ✅ 加载新材料时重置音频/WA 状态，避免沿用上一份材料的压缩字节或时长（否则按句切片会串味甚至整文件兜底播错音频）
     state.audioArrayBuffer = null;
     state.audioDuration = 0;
+    state.sentenceDuration = 0;
     state.audioBlob = null;
     _wa.active = false;
     _wa.buf = null;
@@ -871,6 +851,9 @@
     if (jsonObj.title) state.meta.title = jsonObj.title;
     if (!state.meta.title && jsonObj.id) state.meta.title = jsonObj.id;
     state.sentences = jsonObj.sentences;
+    // 用句子 timestamp 算时长（与 Whisper 对齐同源，比 <audio>.duration 更可靠，避免跨平台小数差异导致切片偏移）
+    var lastSen = state.sentences[state.sentences.length - 1];
+    state.sentenceDuration = (lastSen && isFinite(lastSen.end) && lastSen.end > 0) ? lastSen.end : 0;
     state.audioBlob = (audioSrc && audioSrc.blob) || state.audioBlob || null;
     // materialId 统一优先级：云端真实 id > 云端 title > 本地 meta.title > 音频名 > 默认
     state.materialId = sanitizeId(jsonObj.id || jsonObj.title || state.meta.title || (audioSrc && audioSrc.name) || "material");
@@ -1595,7 +1578,12 @@
   function _waDecodeSentence(s) {
     return new Promise(function (resolve, reject) {
       var ab = state.audioArrayBuffer;
-      var dur = state.audioDuration || (_wa.buf && _wa.buf.duration) || 0;
+      // 优先用句子 timestamp 衍生的时长（与 Whisper 对齐同源，跨平台一致）；
+      // 回退到 <audio>.duration（可能因平台解码器差异产生小数偏差，导致切片偏移）
+      var dur = state.sentenceDuration || state.audioDuration || (_wa.buf && _wa.buf.duration) || 0;
+      console.log("[WA切片] dur来源:", state.sentenceDuration ? "sentenceDuration(" + state.sentenceDuration.toFixed(2) + "s)" :
+            (state.audioDuration ? "audioDuration(" + state.audioDuration.toFixed(2) + "s)" : "fallback"),
+            "| audioDuration=", (state.audioDuration || 0).toFixed(2), "sentenceDuration=", (state.sentenceDuration || 0).toFixed(2));
       if (!ab || !dur) { reject("缺少压缩字节或时长，无法切片"); return; }
       var bps = ab.byteLength / dur;            // 字节/值（CBR 精确，VBR 近似）
       var start = s.start || 0;
@@ -2294,10 +2282,6 @@
     toast(state.autoAdvance ? "自动连播：开" : "自动连播：关");
   });
 
-  // 整篇连续播放（从头）
-  const btnPlayAll = document.getElementById("btn-play-all");
-  if (btnPlayAll) btnPlayAll.addEventListener("click", function () { playFullArticle(true); });
-
   // 暂停 / 继续
   const btnToggle = document.getElementById("btn-toggle");
   function syncToggleLabel() {
@@ -2311,7 +2295,7 @@
   });
   // 播放/暂停事件自动同步按钮文字（含句子自然结束、空格键切换等场景）
   audio.addEventListener("play", function () {
-    // WA 分句正在出声时，忽略原生控件触发的播放，避免与 WA 双重出声（整篇播放请点「▶ 播放全文」）
+    // WA 分句正在出声时，忽略原生控件触发的播放，避免与 WA 双重出声
     if (_wa.active && _wa.playing) { if (!audio.paused) audio.pause(); syncToggleLabel(); return; }
     // 解锁播放（iOS）发生在用户手势内且 ~200ms 内收回，标记期内不视为「整篇播放」
     if (Date.now() - (_wa._unlockAt || 0) > 600) state.fullPlay = true;
