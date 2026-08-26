@@ -1381,9 +1381,9 @@
         console.log("[ensureLocalAudio] ✓ 音频字节已缓存, 大小:", (ab.byteLength / 1024 / 1024).toFixed(1), "MB（WA 将按句懒解码）");
         _maybePredecodeWav();
         _probeDuration();
-        // ✅ 桌面后台整文件解码：完成后 _wa.buf 就绪，句子播放改为「精确时间 seek」（零字节估算偏移）。
-        //   仅桌面触发（移动端整文件解码 5-6 分钟 CPU 占用，不跑；移动仍走懒解码，已验证匹配）。
-        if (!_isWav(ab) && !_isMobile()) _waDecodeFull();
+        // ℹ️ 不在此处触发后台整文件解码：AudioContext 在用户手势前无法 resume（浏览器 autoplay 策略），
+        //   后台 _waDecodeFull 会永久卡住；且它设的 _wa._fullDecoding=true 会挡住首次点击时的整文件解码路径。
+        //   改为在 _waDecodeAndPlay（用户点击句子）时按需触发，此时手势已唤醒 AudioContext，几秒完成。
         return state.audioUrl;
       }).catch(function (err) {
         console.warn("[ensureLocalAudio] 第", attempt + 1, "/3 次失败:", err.message || err);
