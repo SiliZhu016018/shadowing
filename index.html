@@ -1451,11 +1451,15 @@
   // iOS 双层解锁之「锁 B」：在用户手势内对 <audio> 调一次 play() 再立即 pause，
   // 激活底层音频输出子系统，否则 Web Audio 的 start() 静默不出声。
   // 每次播放手势都调用一次（幂等；非手势/非 iOS 时自动跳过），保证后台返回/同步后也能出声。
-  function _waUnlockAudio() {
+  function _waUnlockAudio(needTrick) {
+    if (needTrick === undefined) needTrick = true; // 默认：WA 模式需要 play→pause trick 解锁
     // 顺手 resume 一下 AudioContext（非 iOS 也受益：确保解码发生在 running 状态，避免挂起/错位）
     if (_wa.ctx && _wa.ctx.state === "suspended") { try { _wa.ctx.resume(); } catch (_) {} }
     if (!_isIOS() || !audio) return;
     if (!audio.paused) return;
+    // 桥接模式（<audio> 实时播放）：bridge 自己的 audio.play() 在用户手势内，本身就是 iOS 解锁，
+    //   无需再做 play→pause trick，否则 trick 的 pause 会把 bridge 真实播放一起掐掉（「band 掉音频」）。
+    if (!needTrick) return;
     _wa._unlockAt = Date.now(); // 标记本次为 iOS 解锁播放（供 timeupdate/play 监听区分真实整篇播放）
     var wasMuted = audio.muted;
     var _done = false;
@@ -2172,15 +2176,16 @@
     if (i < 0 || i >= state.sentences.length) return;
     var s = state.sentences[i];
     state.lastIndex = i;
-    // ⚠️ 关键：在用户手势内、任何解码之前先解锁音频（iOS 必须 <audio>.play()/pause() 才能解锁；
-    //    否则首句解码发生在未解锁的 AudioContext 上 → 失败/错位，要到第二句才正常）。
-    _waUnlockAudio();
-    // 整篇播放中点到某句 → 退出整篇模式，改走 WA 分句精听
-    if (state.fullPlay) { state.fullPlay = false; if (!audio.paused) audio.pause(); }
-    // ── 单引擎：所有平台（桌面 + 移动）统一走 Web Audio 精确播放 ──
-    // 字节已缓存（或整文件 buffer 已就绪）→ 统一交由 _waDecodeAndPlay 处理
-    //   （懒解码 → 切片播放；切片失败则整文件解码兜底精确 seek；二者皆失败则优雅停止，不再回退 <audio>）
-    if (state.audioArrayBuffer || (_wa.active && _wa.buf)) {
+    // 整篇播放中点到某句 → 先退出整篇模式（暂停原生 audio），再走分句精听
+    if (state.fullPlay) { state.fullPlay = false; if (audio && !audio.paused) audio.pause(); }
+    // ⚠️ 关键：在用户手势内、任何解码之前先解锁音频（iOS 必须 <audio>.play() 才能解锁）。
+    //    buf 未就绪 → 走 <audio> 桥接播放，bridge 自己的 play() 即解锁，跳过 trick 避免掐断真实播放；
+    //    buf 已就绪 → WA 精确播放，需要 play→pause trick 解锁音频子系统。
+    var useBridge = !_wa.buf;
+    _waUnlockAudio(!useBridge);
+    if (_wa.buf) { _waPlaySentence(i); return; } // 精确模式直接走 WA
+    // 字节已缓存 → 桥接播放 + 后台解码
+    if (state.audioArrayBuffer) {
       _waDecodeAndPlay(i);
       return;
     }
