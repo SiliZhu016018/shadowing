@@ -3717,6 +3717,19 @@
 <script type="module">
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
 
+// ===== Whisper 模型托管（给朋友用 / 国内网络必须改这里）=====
+// 浏览器端 Whisper 默认从 HuggingFace Hub 下载模型（约 75MB），国内常不通、朋友基本拉不动。
+// 给朋友用请改为「自托管」：把模型放到你自己的 Cloudflare R2（公开 + CORS *），
+//   然后把下面 WHISPER_MODEL_HOST 改成你的 R2 公开地址，例如：
+//     "https://pub-xxxx.r2.dev"   或   "https://models.你的域名.com"
+//   模型文件需放在 <host>/Xenova/whisper-tiny.en/resolve/main/ 目录下（见 setup-whisper-models.sh）。
+// 留空 "" 则继续使用默认 HuggingFace（你本机有缓存时仍可用，但朋友可能下载失败）。
+const WHISPER_MODEL_HOST = ""; // ← 自托管后填入你的 R2 公开地址
+if (WHISPER_MODEL_HOST) {
+  env.remoteHost = WHISPER_MODEL_HOST;
+  env.remotePath = "";
+}
+
 // 配置 transformers.js 使用本地缓存
 env.allowLocalModels = false;
 env.useBrowserCache = true;
