@@ -1583,9 +1583,10 @@
   function _waDecodeSentence(s) {
     return new Promise(function (resolve, reject) {
       var ab = state.audioArrayBuffer;
-      // 优先用句子 timestamp 衍生的时长（与 Whisper 对齐同源，跨平台一致）；
-      // 回退到 <audio>.duration（可能因平台解码器差异产生小数偏差，导致切片偏移）
-      var dur = state.sentenceDuration || state.audioDuration || (_wa.buf && _wa.buf.duration) || 0;
+      // ⚠️ 懒解码字节估算必须用「音频文件真实时长」(audioDuration，来自 <audio>.duration，对应文件字节数)。
+      //    绝不能用 sentenceDuration（Whisper 末句 end，常比文件本身长几秒）——会整体前移切片起点导致偏移。
+      //    sentenceDuration 仅桌面精确 seek 模式间接相关（src.start(0, s.start) 直接用时间戳，不靠本 dur 估算）。
+      var dur = state.audioDuration || (_wa.buf && _wa.buf.duration) || 0;
       console.log("[WA切片] dur来源:", state.sentenceDuration ? "sentenceDuration(" + state.sentenceDuration.toFixed(2) + "s)" :
             (state.audioDuration ? "audioDuration(" + state.audioDuration.toFixed(2) + "s)" : "fallback"),
             "| audioDuration=", (state.audioDuration || 0).toFixed(2), "sentenceDuration=", (state.sentenceDuration || 0).toFixed(2));
