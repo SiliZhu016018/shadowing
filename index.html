@@ -844,6 +844,9 @@
     state.audioBlob = null;
     _wa.active = false;
     _wa.buf = null;
+    _wa._fullDecoding = false;
+    _wa._pendingIndex = null;
+    _showDecodeLoading(false);
     _wa.curBuf = null;
     _wa.pausedAt = null;
     _wa.playing = false;
@@ -1679,41 +1682,62 @@
   }
 
   // 解码并播放第 i 句
-  //   优先级：① _wa.buf 已就绪 → 精确时间 seek（零偏移，用户要求「按分段上面的时间播」）
-  //           ② 全平台 → 整文件解码后精确播放（按需触发，非页面加载时，几秒完成）
-  //           ③ 兜底：按句切片懒解码
+  //   优先级：① _wa.buf 已就绪 → 精确时间 seek（零偏移）
+  //           ② 全平台 → 整文件解码后精确播放（按需触发，非页面加载时触发）
+  //           ③ 解码进行中 → 排队等待，解码完成后自动播（不再掉进失败懒解码 + 报错 toast）
   function _waDecodeAndPlay(i) {
     if (i < 0 || i >= state.sentences.length) return;
     // ① 精确时间模式：buffer 就绪直接按 timestamp 定位
     if (_wa.buf) { _waPlaySentence(i); return; }
     var s = state.sentences[i];
-    // ② 全平台：整文件解码后精确播放（用 Whisper 时间戳 s.start 精确 seek，零偏移）
+    // ② 触发整文件解码（按需，用户手势内 AudioContext 已唤醒）
     if (state.audioArrayBuffer && !_wa._fullDecoding) {
       _wa._fullDecoding = true;
+      _wa._pendingIndex = i;                     // 记录本次请求的句子
+      _showDecodeLoading(true);                   // 显示「正在准备音频…」
       _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
         _wa.buf = full; _wa.active = true; _wa._fullDecoding = false;
-        _waPlaySentence(i);                     // 精确 seek 到 s.start
+        _showDecodeLoading(false);
+        // 播放解码完成时用户最后请求的那句（可能用户在等待期间点了别的句）
+        var target = (_wa._pendingIndex != null) ? _wa._pendingIndex : i;
+        _wa._pendingIndex = null;
+        if (target < state.sentences.length) _waPlaySentence(target);
       }).catch(function (e) {
         _wa._fullDecoding = false;
-        console.warn("[WA] 整文件解码失败，回退懒解码:", e);
-        _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
-          .catch(function () { _waDecodeFail(i, e); });
+        _showDecodeLoading(false);
+        console.warn("[WA] 整文件解码失败:", e);
+        _waDecodeFail(i, e);
       });
       return;
     }
-    // ③ 兜底：按句切片懒解码
-    _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
-      .catch(function (e) {
-        console.warn("[WA] 切片解码失败，尝试整文件解码兜底:", e);
-        if (!state.audioArrayBuffer) { _waDecodeFail(i, e); return; }
-        _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
-          _wa.buf = full; _wa.active = true;     // 整文件 buffer 就绪
-          _waPlaySentence(i);                     // 精确 seek 到 s.start，不再误播整文件
-        }).catch(function (e2) {
-          console.warn("[WA] 整文件解码也失败:", e2);
-          _waDecodeFail(i, e2);                   // 不再回退 <audio>，避免错位/误判出错
-        });
-      });
+    // ③ 整文件解码正在进行中 → 排队（更新目标句子，解码完成后自动播最新请求的那句）
+    if (_wa._fullDecoding && state.audioArrayBuffer) {
+      _wa._pendingIndex = i;                      // 更新为最新点击的句子
+      _showDecodeLoading(true);                    // 确保 loading 显示
+      return;                                      // 不掉进懒解码，不报错
+    }
+    // ④ 极端兜底：无字节可用
+    _waDecodeFail(i, new Error("无可用音频字节"));
+  }
+
+  // 解码中的加载提示（替代之前「解码失败」的错误 toast）
+  function _showDecodeLoading(show) {
+    var el = document.getElementById("wa-decode-loading");
+    if (show) {
+      if (!el) {
+        el = document.createElement("div");
+        el.id = "wa-decode-loading";
+        el.textContent = "⏳ 正在准备音频…";
+        el.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);" +
+          "background:rgba(0,0,0,0.8);color:#fff;padding:12px 24px;border-radius:10px;" +
+          "font-size:14px;z-index:9999;pointer-events:none;transition:opacity .2s;";
+        document.body.appendChild(el);
+      }
+      el.style.opacity = "1"; el.style.display = "";
+    } else if (el) {
+      el.style.opacity = "0";
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 250);
+    }
   }
 
   // 从指定句子索引开始播放（采样级精确定位）
@@ -2023,6 +2047,9 @@
     // 1) 清除 WA 引擎状态（切片缓冲一并清掉，下次点击重新懒解码）
     _wa.active = false;
     _wa.buf = null;
+    _wa._fullDecoding = false;
+    _wa._pendingIndex = null;
+    _showDecodeLoading(false);
     _wa.curBuf = null;
     _wa._initPromise = null;
     _wa.playing = false;
