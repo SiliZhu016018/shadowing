@@ -1734,8 +1734,23 @@
     // 停掉之前的桥接轮询
     if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
     state.fullPlay = false;
+    state.lastIndex = i;
+    state.playingIndex = i;
+    highlight(i);
+    syncToggleLabel(true);
     // 确保 audio 可用
     audio.muted = false;
+    // Seek 到句子精确起点 + 播放（若素材刚切换 src 尚未就绪，等 loadedmetadata 再 seek）
+    if (audio.readyState === 0) {
+      var onMeta = function () {
+        audio.removeEventListener("loadedmetadata", onMeta);
+        try { audio.currentTime = Math.max(0, s.start); } catch (_) {}
+        var p2 = audio.play();
+        if (p2 && p2.catch) p2.catch(function () {});
+      };
+      audio.addEventListener("loadedmetadata", onMeta);
+      return;
+    }
     // Seek 到句子精确起点 + 播放
     try { audio.currentTime = Math.max(0, s.start); } catch (_) {}
     var pr = audio.play();
@@ -2186,29 +2201,25 @@
     if (_wa.buf) { _waPlaySentence(i); return; } // 精确模式直接走 WA
     // 字节已缓存 → 桥接播放 + 后台解码
     if (state.audioArrayBuffer) {
+      // ✅ 确保用本地 blob URL 播放（远程 URL 在手机上 seek 不准 → 头两句错位）
+      if (state.audioUrl && state.audioUrl.indexOf("blob:") === 0 && audio.src !== state.audioUrl) {
+        audio.src = state.audioUrl;
+      }
       _waDecodeAndPlay(i);
       return;
     }
-    // 字节未就绪但 <audio> 有 src（loadMaterial 时已设）→ 立即桥接播放，不等待！
-    //   同时后台拉取字节（到达后触发 WA 解码，下次点击自动升级精确模式）
-    if (audio && audio.src) {
-      var s2 = state.sentences[i];
-      state.lastIndex = i;
-      state.playingIndex = i;
-      highlight(i);
-      syncToggleLabel(true);
-      _playViaAudioBridge(s2, i);
-      // 后台补拉字节（如果还没在拉）
-      if (state.audioUrl && !_audioLoading && !state.audioArrayBuffer) {
-        ensureLocalAudio(state.audioUrl).catch(function () {});
-      }
+    // 字节未就绪，但 src 已是本地 blob → 直接桥接（fetch 已近完成，本地 seek 准确）
+    if (audio && audio.src && audio.src.indexOf("blob:") === 0) {
+      _waDecodeAndPlay(i);
       return;
     }
-    // 连 audio.src 都没有 → 触发后台拉取
-    if (state.audioUrl && !_audioLoading) {
-      ensureLocalAudio(state.audioUrl)
-        .then(function () { _waDecodeAndPlay(i); })
-        .catch(function (e) { _waDecodeFail(i, e); });
+    // ⚠️ src 仍是远程 URL（fetch 进行中）→ 不能桥接（手机远程流 seek 不准）！
+    //    先等拉取完成切成 blob，再桥接播放，避免头两句错位。
+    if (state.audioUrl || (audio && audio.src)) {
+      _showDecodeLoading(true);
+      ensureLocalAudio(state.audioUrl || audio.src)
+        .then(function () { _showDecodeLoading(false); _waDecodeAndPlay(i); })
+        .catch(function (e) { _showDecodeLoading(false); _waDecodeFail(i, e); });
       return;
     }
     // 极端：没有任何可用音频源
