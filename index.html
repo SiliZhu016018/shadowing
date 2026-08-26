@@ -1706,7 +1706,7 @@
     var s = state.sentences[i];
     state.lastIndex = i;
     state.playingIndex = i;
-    highlightCurrent(i);
+    highlight(i);
     syncToggleLabel(true);
     // ②③ buf 未就绪 → 用原生 <audio> 即时播放（不等待解码！）
     _playViaAudioBridge(s, i);
