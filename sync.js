@@ -80,11 +80,13 @@ const Sync = {
   clearFetchCache() { _lastFetchResult = null; _lastFetchTime = 0; },
 
   // 邮箱密码注册
+  // 返回 { user, needsConfirmation }：needsConfirmation=true 表示 Supabase 开启了邮箱确认，
+  // 注册成功但 data.session 为 null（尚未验证），需用户去邮箱点验证链接后才能登录。
   async signUp(email, password) {
     const c = await _loadClient(); if (!c) throw new Error("Supabase 未配置");
     const { data, error } = await c.auth.signUp({ email: email, password: password });
     if (error) throw error;
-    return data.user;
+    return { user: data.user, needsConfirmation: !data.session };
   },
   // 邮箱密码登录
   async signIn(email, password) {
@@ -826,6 +828,7 @@ function _ensureAuthOverlay() {
       ".sync-auth-box input { width: 100%; font: inherit; padding: 9px 12px; border: 1px solid rgba(15,23,42,.15); border-radius: 10px; margin-bottom: 8px; box-sizing: border-box; }" +
       ".sync-auth-box input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }" +
       ".sync-auth-err { color: #ef4444; font-size: 13px; min-height: 18px; margin-bottom: 4px; }" +
+      ".sync-auth-info { color: #16a34a; font-size: 13px; min-height: 18px; margin-bottom: 4px; white-space: pre-line; }" +
       ".sync-auth-actions { display: flex; gap: 8px; margin-bottom: 8px; }" +
       ".sync-auth-actions button { flex: 1; padding: 10px; font: inherit; border-radius: 10px; border: 1px solid rgba(15,23,42,.15); background: #fff; cursor: pointer; }" +
       ".sync-btn-primary { background: linear-gradient(135deg,#3b82f6,#6366f1)!important; color: #fff!important; border-color: transparent!important; font-weight: 600; }" +
@@ -849,13 +852,30 @@ function _ensureAuthOverlay() {
   document.getElementById("sync-auth-signup").addEventListener("click", async function () {
     var e = document.getElementById("sync-auth-email").value.trim();
     var p = document.getElementById("sync-auth-password").value;
-    _setErr(""); await Sync.signUp(e, p).then(function () { return Sync.signIn(e, p); }).then(_onAuthSuccess).catch(function (err) { _setErr(err.message || String(err)); });
+    _setErr("");
+    Sync.signUp(e, p).then(function (res) {
+      // 开启了邮箱确认：注册成功但需先验证邮箱，给友好提示而不是难懂的英文报错
+      if (res.needsConfirmation) {
+        _setInfo("注册成功！请到邮箱查收验证邮件，点击邮件里的链接激活账号后即可登录。");
+        return;
+      }
+      return Sync.signIn(e, p);
+    }).then(function (logged) {
+      if (logged) _onAuthSuccess();
+    }).catch(function (err) { _setErr(err.message || String(err)); });
   });
   document.getElementById("sync-auth-close").addEventListener("click", function () { _ensureAuthOverlay().classList.add("sync-hidden"); });
   ov.addEventListener("click", function (e) { if (e.target === ov) ov.classList.add("sync-hidden"); });
   return ov;
 }
-function _setErr(msg) { var el = document.getElementById("sync-auth-err"); if (el) el.textContent = msg || ""; }
+function _setErr(msg) {
+  var el = document.getElementById("sync-auth-err");
+  if (el) { el.textContent = msg || ""; el.classList.remove("sync-auth-info"); el.classList.add("sync-auth-err"); }
+}
+function _setInfo(msg) {
+  var el = document.getElementById("sync-auth-err");
+  if (el) { el.textContent = msg || ""; el.classList.remove("sync-auth-err"); el.classList.add("sync-auth-info"); }
+}
 function _onAuthSuccess() {
   _setErr("");
   _ensureAuthOverlay().classList.add("sync-hidden");
@@ -872,6 +892,7 @@ Sync.openAuth = function () {
   }
   var ov = _ensureAuthOverlay();
   ov.classList.remove("sync-hidden");
+  _setErr(""); // 清空上次的错误/提示，避免残留
   document.getElementById("sync-auth-email").focus();
 };
 
