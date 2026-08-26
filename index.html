@@ -140,6 +140,31 @@
   audio { width: 100%; margin: 0; border-radius: var(--radius); }
   .player-sticky {
     padding: 4px 0 2px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn-play-all {
+    flex: 0 0 auto;
+    border: none;
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    box-shadow: 0 2px 8px rgba(59,130,246,0.35);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: transform .08s ease, filter .15s ease;
+  }
+  .btn-play-all:hover { filter: brightness(1.06); }
+  .btn-play-all:active { transform: scale(0.97); }
+  .player-sticky audio {
+    flex: 1 1 220px;
+    min-width: 200px;
+    height: 38px;
   }
   .sticky-header {
     position: sticky;
@@ -603,7 +628,8 @@
   <p class="material-title hidden" id="material-title"></p>
 
   <div class="player-sticky">
-    <audio id="audio" preload="metadata"></audio>
+    <button id="btn-play-all" class="btn-play-all" title="从头连续播放整篇文章（点任意句可随时切回分句精听）">▶ 播放全文</button>
+    <audio id="audio" controls preload="metadata"></audio>
   </div>
   </div>
 
@@ -732,6 +758,7 @@
     audioBlob: null,    // 用于编辑分段后回写 IndexedDB
     editMode: false,    // 编辑分段模式
     previewEnd: null,   // 试听区间的结束时间
+    fullPlay: false,    // 整篇连续播放模式（用原生 <audio> 播全文，高亮跟随、不按句停）
   };
 
   // ---------- 工具 ----------
@@ -1259,6 +1286,7 @@
   // 统一「当前是否正在出声」判定（取代散落在 syncPlayIcons / togglePlayPause / timeupdate 里的
   // `_wa.active ? _wa.playing : !audio.paused` 多重判断，单一事实来源，避免补丁堆叠后逻辑漂移）
   function isPlaybackActive() {
+    if (state.fullPlay) return !audio.paused;
     if (state.playingIndex == null) return false;
     return _wa.active ? _wa.playing : !audio.paused;
   }
@@ -1432,6 +1460,7 @@
   function _waUnlockAudio() {
     if (!_isIOS() || !audio) return;
     if (!audio.paused) return;
+    _wa._unlockAt = Date.now(); // 标记本次为 iOS 解锁播放（供 timeupdate/play 监听区分真实整篇播放）
     var _done = false;
     function _stop() {
       if (_done) return;
@@ -1624,6 +1653,20 @@
     };
   }
 
+  // 解码彻底失败（切片 + 整文件都失败）：不再回退 <audio>（避免错位/误判出错），
+  // 仅优雅地停止并提示。正常音频几乎不会走到这里（WAV 预解码 / MP3 比特池前导已覆盖绝大多数情况）。
+  function _waDecodeFail(i, e) {
+    console.warn("[WA] 该句音频解码失败，无法播放:", e);
+    _wa.playing = false;
+    _wa.pausedAt = null;
+    _waStopProgressMonitor();
+    state.playingIndex = null;
+    state._hl = null;
+    highlight(null);
+    syncPlayIcons();
+    toast("该句音频解码失败，无法播放（文件可能损坏或不被支持）");
+  }
+
   // 解码并播放第 i 句（统一入口：整文件 buffer 就绪则采样级定位，否则按句懒解码）
   function _waDecodeAndPlay(i) {
     if (i < 0 || i >= state.sentences.length) return;
@@ -1632,13 +1675,13 @@
     _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
       .catch(function (e) {
         console.warn("[WA] 切片解码失败，尝试整文件解码兜底:", e);
-        if (!state.audioArrayBuffer) { _playSentenceByAudio(i); return; }
+        if (!state.audioArrayBuffer) { _waDecodeFail(i, e); return; }
         _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
           _wa.buf = full; _wa.active = true;     // 整文件 buffer 就绪
           _waPlaySentence(i);                     // 精确 seek 到 s.start，不再误播整文件
         }).catch(function (e2) {
-          console.warn("[WA] 整文件解码也失败，回退 <audio>:", e2);
-          _playSentenceByAudio(i);
+          console.warn("[WA] 整文件解码也失败:", e2);
+          _waDecodeFail(i, e2);                   // 不再回退 <audio>，避免错位/误判出错
         });
       });
   }
@@ -1650,6 +1693,7 @@
     if (i < 0 || i >= state.sentences.length) return;
     var s = state.sentences[i];
     _waUnlockAudio(); // 每次播放手势重设 iOS「锁 B」，确保后台返回/同步后也能出声
+    state.fullPlay = false; // 切回分句精听，退出整篇模式
     state.lastIndex = i;
     state.playingIndex = i;
     state._hl = i;
@@ -1992,50 +2036,82 @@
     if (e.persisted || document.visibilityState !== "hidden") _waRecoverOnForeground();
   });
 
+  // ── 整篇连续播放：用原生 <audio> 播全文（连续播放无分句 seek 漂移，最稳）──
+  // fromStart=true 从头播；false 从当前位置（若已暂停在中途）续播。
+  function playFullArticle(fromStart) {
+    if (!state.audioUrl && !state.audioArrayBuffer) { toast("没有可用音频"); return; }
+    // 停掉 WA 分句播放，避免双重出声
+    _waStop();
+    _wa.playing = false;
+    _wa.pausedAt = null;
+    _waUnlockAudio(); // 无害：iOS 解锁（确保原生 <audio>.play() 能出声）
+
+    function start() {
+      if (fromStart) { try { audio.currentTime = 0; } catch (_) {} }
+      state.fullPlay = true;
+      state.playingIndex = 0;
+      state._hl = 0;
+      highlight(0);
+      syncPlayIcons();
+      var pr = audio.play();
+      if (pr && pr.catch) pr.catch(function (e) {
+        console.warn("[整篇播放] 失败:", e);
+        state.fullPlay = false;
+        state.playingIndex = null; state._hl = null;
+        highlight(null); syncPlayIcons();
+        toast("播放失败，请检查音频文件");
+      });
+    }
+
+    if (audio.src) { start(); return; }
+    if (state.audioUrl) { audio.src = state.audioUrl; start(); return; }
+    if (state.audioArrayBuffer) {
+      try { audio.src = URL.createObjectURL(new Blob([state.audioArrayBuffer])); start(); }
+      catch (e) { toast("无法播放整篇"); }
+      return;
+    }
+    toast("没有可用音频");
+  }
+
   function playSentence(i) {
     console.log("[playSentence] i=" + i + " | _wa.active=" + _wa.active +
       " | _wa.buf=" + !!_wa.buf + " | audioArrayBuffer=" + !!state.audioArrayBuffer);
     if (i < 0 || i >= state.sentences.length) return;
     var s = state.sentences[i];
     state.lastIndex = i;
+    // 整篇播放中点到某句 → 退出整篇模式，改走 WA 分句精听
+    if (state.fullPlay) { state.fullPlay = false; if (!audio.paused) audio.pause(); }
     // ── 单引擎：所有平台（桌面 + 移动）统一走 Web Audio 精确播放 ──
     // 字节已缓存（或整文件 buffer 已就绪）→ 统一交由 _waDecodeAndPlay 处理
-    //   （懒解码 → 切片播放；切片失败则整文件解码兜底精确 seek；二者皆失败才回退 <audio>）
+    //   （懒解码 → 切片播放；切片失败则整文件解码兜底精确 seek；二者皆失败则优雅停止，不再回退 <audio>）
     if (state.audioArrayBuffer || (_wa.active && _wa.buf)) {
       _waDecodeAndPlay(i);
       return;
     }
-    // 尚未缓存字节（极少）：触发后台拉取，先用 <audio> 播，字节到达后下次点击走 WA
-    if (state.audioUrl && !_audioLoading) ensureLocalAudio(state.audioUrl).catch(function () {});
-    _playSentenceByAudio(i);
+    // 尚未缓存字节（极少）：触发后台拉取，字节到达后由 WA 精确播放（不再用 <audio> 兜底）
+    if (state.audioUrl && !_audioLoading) {
+      ensureLocalAudio(state.audioUrl)
+        .then(function () { _waDecodeAndPlay(i); })
+        .catch(function (e) { _waDecodeFail(i, e); });
+      return;
+    }
+    // 极端：没有任何可用音频源
+    _waDecodeFail(i, new Error("无可用音频源"));
   }
 
-  // 桌面端 / 回退路径：使用 <audio> 元素 + seekAndPlay
-  function _playSentenceByAudio(i) {
-    // ✅ 安全网：WA 已激活时绝不走 <audio> 路径（否则 iOS 会触发全文播放 + 无法暂停）
-    if (_wa.active && _wa.buf) {
-      console.warn("[_playSentenceByAudio] WA 已激活，拦截 <audio> 回退，转用 _waPlaySentence");
-      return _waPlaySentence(i);
-    }
-    if (i < 0 || i >= state.sentences.length) return;
-    const s = state.sentences[i];
-    state.lastIndex = i;
-    state.playingIndex = i;
-    state._hl = i;
-    _wa.active = false; // 走 <audio> 安全网时关闭 WA 标记，让 timeupdate 正常驱动高亮
-    audio.playbackRate = state.rate;
-    highlight(i);
-    syncPlayIcons();
-    seekAndPlay(s.start, function () {
-      const p = audio.play();
-      if (p && p.catch) p.catch(function () { toast("无法播放，请检查音频文件"); });
-    });
-  }
+  // （已移除 <audio> 兜底播放：句子播放统一走 Web Audio，解码失败仅优雅停止，不再回退 <audio>）
 
   // 暂停 / 继续：读到一半想停，点一下继续（不会跳句，从当前位置接着播）
   function togglePlayPause() {
+    // ── 整篇连续播放模式：直接控制原生 <audio> ──
+    if (state.fullPlay) {
+      if (audio.paused) { var p = audio.play(); if (p && p.catch) p.catch(function () {}); }
+      else audio.pause();
+      syncPlayIcons();
+      return;
+    }
     if (state.playingIndex == null && state.lastIndex == null) return;
-    // ── WA 模式（iOS）──
+    // ── WA 分句播放模式 ──
     if (_wa.active) {
       if (_wa.playing) { _waPause(); return; }
       if (_wa.pausedAt != null) { _waResume(); return; }
@@ -2043,16 +2119,9 @@
       _waDecodeAndPlay(state.lastIndex);
       return;
     }
-    // ── <audio> 模式（桌面）──
-    if (audio.paused) {
-      if (state.playingIndex == null) playSentence(state.lastIndex);
-      else {
-        const p = audio.play();
-        if (p && p.catch) p.catch(function () {});
-      }
-    } else {
-      audio.pause();
-    }
+    // 未激活 WA：有音频就整篇播放，否则播最后一句
+    if (state.audioUrl || state.audioArrayBuffer) { playFullArticle(false); return; }
+    if (state.lastIndex != null) playSentence(state.lastIndex);
   }
 
   function markPlayed(i) {
@@ -2069,13 +2138,29 @@
   }
 
   audio.addEventListener("timeupdate", function () {
-    // ✅ Web Audio 模式下：<audio> 完全不参与播放，timeupdate 数据全部无效。
+    // ✅ Web Audio 分句模式下：<audio> 完全不参与播放，timeupdate 数据全部无效。
     //   必须用 _wa.active（不仅 _wa.playing）守卫——因为句子间隙 _wa.playing=false，
     //   若只检查 _wa.playing，<audio> 的 timeupdate 会趁虚而入用错误 currentTime 重算高亮 → 高亮错行。
-    if (_wa.active) return;
+    //   整篇模式下 _wa.active 可能也为 true，但 fullPlay 优先，故用 `&& !state.fullPlay` 放行。
+    if (_wa.active && !state.fullPlay) return;
     // 试听区间：到结束点自动停，不干扰正常跟读高亮
     if (state.previewEnd != null) {
       if (audio.currentTime >= state.previewEnd - 0.04) { audio.pause(); state.previewEnd = null; }
+      return;
+    }
+    // ── 整篇连续播放：高亮跟随语音，但不按句停止 ──
+    if (state.fullPlay) {
+      const t = audio.currentTime;
+      let hl = 0;
+      for (let k = 0; k < state.sentences.length; k++) {
+        if (t >= state.sentences[k].start) hl = k; else break;
+      }
+      if (hl !== state._hl) {
+        state._hl = hl;
+        state.playingIndex = hl; // 让当前句行内播放图标同步
+        highlight(hl);
+        syncPlayIcons();
+      }
       return;
     }
     if (state.playingIndex == null) return;
@@ -2095,8 +2180,6 @@
 
     // 停止点始终用「当前这句」的结束时间（严格按编辑分段，仅在末尾留 0.02s 余量）
     if (t >= cur.end - 0.02) {
-      // ✅ WA 模式下：<audio> 的自动进句/循环完全由 _waPlaySentence 的 onended 处理（入口处
-      //   `if (_wa.active) return;` 已拦截），此处只处理 <audio> 模式的停止/循环/连播。
       if (state.loop) {
         // 循环：同样先精确 seek 再续播，避免 iOS 循环点漂移
         seekAndPlay(cur.start, function () { const p = audio.play(); if (p && p.catch) p.catch(function () {}); });
@@ -2211,6 +2294,10 @@
     toast(state.autoAdvance ? "自动连播：开" : "自动连播：关");
   });
 
+  // 整篇连续播放（从头）
+  const btnPlayAll = document.getElementById("btn-play-all");
+  if (btnPlayAll) btnPlayAll.addEventListener("click", function () { playFullArticle(true); });
+
   // 暂停 / 继续
   const btnToggle = document.getElementById("btn-toggle");
   function syncToggleLabel() {
@@ -2223,9 +2310,26 @@
     syncToggleLabel();
   });
   // 播放/暂停事件自动同步按钮文字（含句子自然结束、空格键切换等场景）
-  audio.addEventListener("play", syncToggleLabel);
-  audio.addEventListener("pause", syncToggleLabel);
-  audio.addEventListener("ended", syncToggleLabel);
+  audio.addEventListener("play", function () {
+    // WA 分句正在出声时，忽略原生控件触发的播放，避免与 WA 双重出声（整篇播放请点「▶ 播放全文」）
+    if (_wa.active && _wa.playing) { if (!audio.paused) audio.pause(); syncToggleLabel(); return; }
+    // 解锁播放（iOS）发生在用户手势内且 ~200ms 内收回，标记期内不视为「整篇播放」
+    if (Date.now() - (_wa._unlockAt || 0) > 600) state.fullPlay = true;
+    syncToggleLabel();
+  });
+  audio.addEventListener("pause", function () {
+    // 暂停时保留 fullPlay（是否「正在播放」由 isPlaybackActive 的 !audio.paused 决定），不清零
+    syncToggleLabel();
+  });
+  audio.addEventListener("ended", function () {
+    if (state.fullPlay) {
+      state.fullPlay = false;
+      state.playingIndex = null;
+      state._hl = null;
+      highlight(null);
+    }
+    syncToggleLabel();
+  });
   syncToggleLabel();
 
   document.getElementById("btn-reset").addEventListener("click", function () {
