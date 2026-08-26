@@ -2189,7 +2189,22 @@
       _waDecodeAndPlay(i);
       return;
     }
-    // 尚未缓存字节（极少）：触发后台拉取，字节到达后由 WA 精确播放（不再用 <audio> 兜底）
+    // 字节未就绪但 <audio> 有 src（loadMaterial 时已设）→ 立即桥接播放，不等待！
+    //   同时后台拉取字节（到达后触发 WA 解码，下次点击自动升级精确模式）
+    if (audio && audio.src) {
+      var s2 = state.sentences[i];
+      state.lastIndex = i;
+      state.playingIndex = i;
+      highlight(i);
+      syncToggleLabel(true);
+      _playViaAudioBridge(s2, i);
+      // 后台补拉字节（如果还没在拉）
+      if (state.audioUrl && !_audioLoading && !state.audioArrayBuffer) {
+        ensureLocalAudio(state.audioUrl).catch(function () {});
+      }
+      return;
+    }
+    // 连 audio.src 都没有 → 触发后台拉取
     if (state.audioUrl && !_audioLoading) {
       ensureLocalAudio(state.audioUrl)
         .then(function () { _waDecodeAndPlay(i); })
