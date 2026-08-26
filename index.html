@@ -1444,6 +1444,8 @@
   // 激活底层音频输出子系统，否则 Web Audio 的 start() 静默不出声。
   // 每次播放手势都调用一次（幂等；非手势/非 iOS 时自动跳过），保证后台返回/同步后也能出声。
   function _waUnlockAudio() {
+    // 顺手 resume 一下 AudioContext（非 iOS 也受益：确保解码发生在 running 状态，避免挂起/错位）
+    if (_wa.ctx && _wa.ctx.state === "suspended") { try { _wa.ctx.resume(); } catch (_) {} }
     if (!_isIOS() || !audio) return;
     if (!audio.paused) return;
     _wa._unlockAt = Date.now(); // 标记本次为 iOS 解锁播放（供 timeupdate/play 监听区分真实整篇播放）
@@ -1678,28 +1680,28 @@
 
   // 解码并播放第 i 句
   //   优先级：① _wa.buf 已就绪 → 精确时间 seek（零偏移，用户要求「按分段上面的时间播」）
-  //           ② 桌面 → 整文件解码后精确播放（CPU 强，几秒完成，根除字节估算 2s 偏移）
-  //           ③ 移动 → 按句懒解码（已验证匹配，保持现状）
+  //           ② 全平台 → 整文件解码后精确播放（按需触发，非页面加载时，几秒完成）
+  //           ③ 兜底：按句切片懒解码
   function _waDecodeAndPlay(i) {
     if (i < 0 || i >= state.sentences.length) return;
     // ① 精确时间模式：buffer 就绪直接按 timestamp 定位
     if (_wa.buf) { _waPlaySentence(i); return; }
     var s = state.sentences[i];
-    // ② 桌面：直接整文件解码后精确播放（避免懒解码字节估算偏移）
-    if (!_isMobile() && state.audioArrayBuffer && !_wa._fullDecoding) {
+    // ② 全平台：整文件解码后精确播放（用 Whisper 时间戳 s.start 精确 seek，零偏移）
+    if (state.audioArrayBuffer && !_wa._fullDecoding) {
       _wa._fullDecoding = true;
       _waDecodeBytes(state.audioArrayBuffer).then(function (full) {
         _wa.buf = full; _wa.active = true; _wa._fullDecoding = false;
         _waPlaySentence(i);                     // 精确 seek 到 s.start
       }).catch(function (e) {
         _wa._fullDecoding = false;
-        console.warn("[WA] 桌面整文件解码失败，回退懒解码:", e);
+        console.warn("[WA] 整文件解码失败，回退懒解码:", e);
         _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
           .catch(function () { _waDecodeFail(i, e); });
       });
       return;
     }
-    // ③ 移动 / 兜底：按句切片懒解码
+    // ③ 兜底：按句切片懒解码
     _waDecodeSentence(s).then(function (res) { _waPlaySlice(res.buf, s, i, res.leadIn); })
       .catch(function (e) {
         console.warn("[WA] 切片解码失败，尝试整文件解码兜底:", e);
@@ -2107,6 +2109,9 @@
     if (i < 0 || i >= state.sentences.length) return;
     var s = state.sentences[i];
     state.lastIndex = i;
+    // ⚠️ 关键：在用户手势内、任何解码之前先解锁音频（iOS 必须 <audio>.play()/pause() 才能解锁；
+    //    否则首句解码发生在未解锁的 AudioContext 上 → 失败/错位，要到第二句才正常）。
+    _waUnlockAudio();
     // 整篇播放中点到某句 → 退出整篇模式，改走 WA 分句精听
     if (state.fullPlay) { state.fullPlay = false; if (!audio.paused) audio.pause(); }
     // ── 单引擎：所有平台（桌面 + 移动）统一走 Web Audio 精确播放 ──
