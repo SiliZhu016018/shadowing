@@ -943,13 +943,7 @@
       // 点击播放图标：当前句 → 暂停/继续；其他句 → 播放该句
       ico.addEventListener("click", function (e) {
         e.stopPropagation();
-        // 当前正在播这句 → 切换暂停/继续（WA 模式用 _waPause/_waResume）
-        if (_wa.active) {
-          if (state.playingIndex === i && _wa.playing) { _waPause(); return; }
-          if (state.playingIndex === i && _wa.pausedAt != null) { _waResume(); return; }
-        }
-        // 其他情况：播放点击的那一句
-        playSentence(i);
+        toggleSentencePlay(i);
       });
       txt.appendChild(ico);
       // 生词高亮：把文本里匹配的 vocab 词包成 span（不破坏播放图标）
@@ -1006,11 +1000,10 @@
       li.addEventListener("click", function (e) {
         if (e.target.closest("button")) return;
         if (e.target.closest(".vocab-hl")) return; // 生词高亮点击不触发播放
-        console.log("[click] 行点击 → playSentence(" + i + ") | _wa.active=" + _wa.active + " _wa.playing=" + _wa.playing + " _wa.pausedAt=" + _wa.pausedAt);
-        playSentence(i);
+        toggleSentencePlay(i);
       });
       li.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); playSentence(i); }
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSentencePlay(i); }
       });
       star.addEventListener("click", function (e) { e.stopPropagation(); toggleHard(i, star); });
       rec.addEventListener("click", function (e) { e.stopPropagation(); toggleRecord(i, rec); });
@@ -1906,6 +1899,65 @@
     _waStopProgressMonitor();
     syncPlayIcons();   // 暂停后让当前句图标翻回 ▶（补全「播放/暂停图标一致」）
     console.log("[WA] 暂停于", _wa.pausedAt.toFixed(3), "s");
+  }
+
+  // ── 句子播放「暂停/继续」统一入口（WA 精确模式 与 <audio> 桥接模式 通用）──
+  // 之前图标点击只认 _wa.active（精确模式），桥接模式下走到末尾 playSentence 从头重播，
+  // 导致「长文件首次播放/解码完成前点句」无法暂停 → 这里补齐桥接模式的 pause/resume。
+  function sentencePause(i) {
+    if (!_wa.active) {
+      // 桥接模式：原生 <audio> 暂停即可，currentTime 自动留在断点
+      if (audio && !audio.paused) {
+        _wa.pausedAt = audio.currentTime;  // 标记「已暂停」（供恢复判断）
+        audio.pause();
+        if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
+        syncPlayIcons();
+        console.log("[audio 桥接] 暂停于", _wa.pausedAt.toFixed(2), "s");
+        return true;
+      }
+      return false;
+    }
+    if (_wa.playing) { _waPause(); return true; }
+    return false;
+  }
+
+  // 从断点恢复当前句（两种模式通用）
+  function sentenceResume(i) {
+    if (!_wa.active) {
+      // 桥接模式：原生 <audio> 从当前 currentTime 继续，重新挂句子结束轮询
+      if (audio && audio.paused && _wa.pausedAt != null) {
+        var s = state.sentences[i];
+        var pr = audio.play();
+        if (pr && pr.catch) pr.catch(function () {});
+        var sentenceEnd = s.start + s.duration;
+        _wa._bridgeCheckId = setInterval(function () {
+          if (!audio || audio.paused || audio.currentTime >= sentenceEnd) {
+            if (_wa._bridgeCheckId != null) { clearInterval(_wa._bridgeCheckId); _wa._bridgeCheckId = null; }
+            if (audio && !audio.paused && audio.currentTime >= sentenceEnd) {
+              audio.pause(); syncToggleLabel(false);
+            }
+          }
+        }, 80);
+        _wa.pausedAt = null;
+        syncPlayIcons();
+        return true;
+      }
+      return false;
+    }
+    if (_wa.pausedAt != null) { _waResume(); return true; }
+    return false;
+  }
+
+  // 点句子的统一行为：正在播→暂停；已暂停→从断点继续（不重头）；其他→从头播放
+  function toggleSentencePlay(i) {
+    if (i < 0 || i >= state.sentences.length) return;
+    if (state.playingIndex === i && isPlaybackActive() && _wa.pausedAt == null) {
+      sentencePause(i); return;
+    }
+    if (state.playingIndex === i && _wa.pausedAt != null) {
+      sentenceResume(i); return;
+    }
+    playSentence(i);
   }
 
   // 从暂停位置恢复播放（支持整文件 buffer 与单句切片两种模式）
