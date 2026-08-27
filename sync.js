@@ -635,7 +635,20 @@ Sync.applyCloudDataToLocal = async function (data) {
   // 云端同步下来的已删除列表（其他设备删的）
   var cloudDeleted = (data.deletedIds && Array.isArray(data.deletedIds)) ? data.deletedIds : [];
   var mergedDeleted = deletedArr.concat(cloudDeleted.filter(function (id) { return deletedArr.indexOf(id) === -1; }));
+
+  // 🛡️ 最终防线：活材料（云端 materials 表里存在的）绝不会被当"已删除"处理。
+  // 即使 localStorage/云端墓碑残留了旧 ID，这里也会自动摘除，防止"删了又重生成"被吞。
+  var liveIds = new Set((data.materials || []).map(function (m) { return m.id; }));
+  if (liveIds.size) {
+    var before = mergedDeleted.length;
+    mergedDeleted = mergedDeleted.filter(function (id) { return !liveIds.has(id); });
+    if (mergedDeleted.length !== before) {
+      console.log("[Sync] applyCloudDataToLocal 最终防线：从 deleted 列表摘除", before - mergedDeleted.length, "个活材料");
+    }
+  }
+
   try { localStorage.setItem("shadowing:deleted_ids", JSON.stringify(mergedDeleted)); } catch (_) {}
+
   var deletedIds = new Set(mergedDeleted);
   var synced = _loadSyncedIds();
 
