@@ -222,6 +222,9 @@ const Sync = {
     const { error } = await c.from("materials").upsert(row);
     if (error) throw error;
     console.log("[Sync] upsertMaterial", material.id, "audio_path:", audioPath || "(保持不变)");
+    // 🛡️ 自愈：重生成/覆盖上传同名材料时，清掉它自己的「已删除」墓碑，
+    // 否则旧墓碑会在下次同步时把刚上传的材料当"已删除"藏起来甚至云端物理删掉。
+    Sync.healDeletedIds([material.id]).catch(function (e) { console.warn("[Sync] 上传时自愈墓碑失败", e); });
     Sync.clearFetchCache(); // 上传后清缓存
     return row;
   },
@@ -332,6 +335,20 @@ const Sync = {
   async clearDeletedList() {
     const c = await _loadClient(); if (!c || !_user) return;
     try { await c.from("user_settings").upsert({ user_id: _uid(), deleted_ids: [] }); } catch (e) {}
+  },
+
+  // 自愈：把「被误标删除、但其实云端 materials 表还活着的材料」从 deleted_ids 里摘掉
+  async healDeletedIds(ids) {
+    const c = await _loadClient(); if (!c || !_user || !ids || !ids.length) return;
+    const uid = _uid();
+    try {
+      const { data: cur } = await c.from("user_settings").select("deleted_ids").eq("user_id", uid).maybeSingle();
+      let arr = (cur && Array.isArray(cur.deleted_ids)) ? cur.deleted_ids.slice() : [];
+      const rm = new Set(ids);
+      arr = arr.filter(function (id) { return !rm.has(id); });
+      await c.from("user_settings").upsert({ user_id: uid, deleted_ids: arr });
+      console.log("[Sync] healDeletedIds 已摘除:", ids);
+    } catch (e) { console.warn("[Sync] healDeletedIds 失败", e); }
   },
 
   // 🧹 云端幽灵清理：把「已删除列表」里仍躺在云端 materials 表的材料彻底删掉
@@ -459,6 +476,27 @@ const Sync = {
     // 这样本地独有数据不会丢、云端独有数据也能下到本地，且不会用旧版本覆盖新版本
     const data = await Sync.fetchAll();
     if (!data) return null;
+
+    // 🛡️ 自愈：活材料被误标「已删除」→ 从 deleted_ids 摘除，绝不当成已删除处理（否则会被藏起来甚至云端物理删掉）
+    // 场景：材料曾被删除（写入 deleted_ids 墓碑），用户之后重新生成同名材料（ID 复用）→ 旧墓碑仍在 →
+    //      同步时会被 applyCloudDataToLocal 跳过 + cleanupCloudDeleted 云端物理删除。这里在同步前拦截修复。
+    const _liveIds = new Set((data.materials || []).map(function (m) { return m.id; }));
+    const _rawDel = (data.deletedIds || []).filter(Boolean);
+    const _healed = _rawDel.filter(function (id) { return _liveIds.has(id); });
+    if (_healed.length) {
+      data.deletedIds = _rawDel.filter(function (id) { return !_liveIds.has(id); });
+      // 同步清掉本地 localStorage 里的相同墓碑，否则 applyCloudDataToLocal 合并时又会算进去
+      try {
+        const _localDel = JSON.parse(localStorage.getItem("shadowing:deleted_ids") || "[]");
+        if (Array.isArray(_localDel)) {
+          const _rm = new Set(_healed);
+          localStorage.setItem("shadowing:deleted_ids", JSON.stringify(_localDel.filter(function (id) { return !_rm.has(id); })));
+        }
+      } catch (_) {}
+      Sync.healDeletedIds(_healed).catch(function (e) { console.warn("[Sync] healDeletedIds 异常", e); });
+      console.log("[Sync] 自愈：从 deleted_ids 摘除活材料（防误删）:", _healed);
+    }
+
     const stats = await Sync.applyCloudDataToLocal(data);
     // 把过滤后统计挂到返回值上，供 toast 展示「实际留下几个」而非「API 返回几个」
     data._syncStats = stats;

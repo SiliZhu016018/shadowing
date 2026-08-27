@@ -97,7 +97,10 @@ self.addEventListener("fetch", function (e) {
       if (m) return m;
       return fetch(req).then(function (res) {
         const copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(req.url, copy); }).catch(function () {});
+        // 仅缓存 http/https 请求；浏览器扩展等非标准协议不支持 Cache API
+        if (url.protocol === "http:" || url.protocol === "https:") {
+          caches.open(CACHE).then(function (c) { c.put(req.url, copy); }).catch(function () {});
+        }
         return res;
       }).catch(function () { return m || Response.error(); });
     })
