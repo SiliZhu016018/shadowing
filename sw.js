@@ -15,13 +15,19 @@ const CDN = [
 
 // Supabase 数据与鉴权请求：绝对不能缓存，否则空列表/旧数据会被永久缓存
 function isApiRequest(url) {
-  if (url.hostname.endsWith("supabase.co")) return true;
   const p = url.pathname;
-  return p.indexOf("/rest/v1/") !== -1
-      || p.indexOf("/storage/v1/") !== -1
-      || p.indexOf("/auth/v1/") !== -1
-      || p.indexOf("/realtime/") !== -1
-      || p.indexOf("/functions/v1/") !== -1;
+  // 模型文件（静态不变）：允许缓存
+  if (p.indexOf("/whisper-models/") !== -1) return false;
+  if (url.hostname.endsWith("supabase.co")) {
+    // 数据/鉴权 API：绝不缓存
+    if (p.indexOf("/rest/v1/") !== -1
+     || p.indexOf("/auth/v1/") !== -1
+     || p.indexOf("/realtime/") !== -1
+     || p.indexOf("/functions/v1/") !== -1) return true;
+    // 存储桶中的非模型文件：也不缓存（用户上传的音频等）
+    if (p.indexOf("/storage/v1/") !== -1) return true;
+  }
+  return false;
 }
 
 self.addEventListener("install", function (e) {
