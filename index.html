@@ -3715,24 +3715,30 @@
 
 <!-- ==================== 浏览器端对齐引擎（Whisper WASM + pdf.js）==================== -->
 <script type="module">
-import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
-
 // ===== Whisper 模型托管（给朋友用 / 国内网络必须改这里）=====
-// 浏览器端 Whisper 默认从 HuggingFace Hub 下载模型（约 75MB），国内常不通、朋友基本拉不动。
-// 给朋友用请改为「自托管」：把模型放到你自己的 Cloudflare R2（公开 + CORS *），
-//   然后把下面 WHISPER_MODEL_HOST 改成你的 R2 公开地址，例如：
-//     "https://pub-xxxx.r2.dev"   或   "https://models.你的域名.com"
+// 浏览器端 Whisper 默认从 HuggingFace Hub 下载模型（int8 量化版约 60MB），国内常不通、朋友基本拉不动。
+// 给朋友用请改为「自托管」：把模型放到你自己的 Supabase Storage（公开桶），
+//   然后把下面 WHISPER_MODEL_HOST 改成你的 Supabase 公开地址，例如：
+//     "https://xxxx.supabase.co/storage/v1/object/public/whisper-models"
 //   模型文件需放在 <host>/Xenova/whisper-tiny.en/resolve/main/ 目录下（见 setup-whisper-models.sh）。
 // 留空 "" 则继续使用默认 HuggingFace（你本机有缓存时仍可用，但朋友可能下载失败）。
 const WHISPER_MODEL_HOST = "https://xnydehbezqzqphdlnbcs.supabase.co/storage/v1/object/public/whisper-models";
-if (WHISPER_MODEL_HOST) {
-  env.remoteHost = WHISPER_MODEL_HOST;
-  env.remotePath = "";
-}
 
-// 配置 transformers.js 使用本地缓存
-env.allowLocalModels = false;
-env.useBrowserCache = true;
+// ⚡ 懒加载：transformers.js 本身约 2MB+，且会触发模型下载。
+// 只在用户真正点「生成材料」时才动态 import，普通浏览/跟读材料不加载，避免拖慢页面初始化。
+let _whisperMod = null;
+async function ensureWhisper() {
+  if (_whisperMod) return _whisperMod;
+  const mod = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3");
+  if (WHISPER_MODEL_HOST) {
+    mod.env.remoteHost = WHISPER_MODEL_HOST;
+    mod.env.remotePath = "";
+  }
+  mod.env.allowLocalModels = false;
+  mod.env.useBrowserCache = true;
+  _whisperMod = mod;
+  return mod;
+}
 
 const STATUS = document.getElementById("mk-status");
 const PROGRESS_WRAP = document.getElementById("mk-progress-wrap");
@@ -4163,16 +4169,17 @@ document.getElementById("mk-run").addEventListener("click", async function () {
       setProgress(5);
       const rawText = await extractPdfText(pdfF);
       pdfSentences = splitSentences(rawText);
-      setStatus("① PDF 提取完成（" + pdfSentences.length + " 句，仅作对照）\n② 正在加载 AI 语音模型（首次需下载约 75MB）…");
+      setStatus("① PDF 提取完成（" + pdfSentences.length + " 句，仅作对照）\n② 正在加载 AI 语音模型（首次需下载约 60MB（模型 + 推理运行时））…");
       setProgress(10);
     } else {
-      setStatus("① 无 PDF，文字将由语音直接生成\n② 正在加载 AI 语音模型（首次需下载约 75MB）…");
+      setStatus("① 无 PDF，文字将由语音直接生成\n② 正在加载 AI 语音模型（首次需下载约 60MB（模型 + 推理运行时））…");
       setProgress(10);
     }
 
     // Step 2: 加载 Whisper 模型
     let transcriber;
     try {
+      const { pipeline } = await ensureWhisper();
       transcriber = await pipeline(
         "automatic-speech-recognition",
         "Xenova/whisper-tiny.en",
