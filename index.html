@@ -3724,7 +3724,7 @@ import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transfo
 //     "https://pub-xxxx.r2.dev"   或   "https://models.你的域名.com"
 //   模型文件需放在 <host>/Xenova/whisper-tiny.en/resolve/main/ 目录下（见 setup-whisper-models.sh）。
 // 留空 "" 则继续使用默认 HuggingFace（你本机有缓存时仍可用，但朋友可能下载失败）。
-const WHISPER_MODEL_HOST = "https://pub-7fd05ceb6ee4f11a8e3af29a112f12f.r2.dev";
+const WHISPER_MODEL_HOST = "https://whisper-models.sillyzhu4work.workers.dev";
 if (WHISPER_MODEL_HOST) {
   env.remoteHost = WHISPER_MODEL_HOST;
   env.remotePath = "";
