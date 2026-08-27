@@ -1893,6 +1893,9 @@
     if (!_wa.playing || !_wa.src) return;
     var elapsed = (_wa.ctx.currentTime - _wa.playStartCtxTime) * state.rate;
     _wa.pausedAt = _wa.playStartOffset + elapsed;
+    // 先摘掉 onended，防止 stop() 触发「自动进句/循环重播」把 state.playingIndex 清掉
+    var oldOnEnded = _wa.src.onended;
+    _wa.src.onended = null;
     try { _wa.src.stop(); } catch (_) {}
     _wa.src = null;
     _wa.playing = false;
