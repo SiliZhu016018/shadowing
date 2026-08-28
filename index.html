@@ -4581,8 +4581,8 @@ function syncPullAll() {
     try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {}
     if (lastId && state.materialId && state.materialId !== lastId) {
       console.log("[syncPullAll] 用户已加载", state.materialId, "，跳过自动恢复 lastId =", lastId);
-      loadVocab();
-      renderList();
+      if (typeof loadVocab === "function") loadVocab();
+      if (typeof renderList === "function") renderList();
     } else if (lastId) {
       _idbGet(lastId).then(function (row) {
         if (row && row.material && row.material.sentences && row.material.sentences.length) {
