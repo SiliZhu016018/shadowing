@@ -4576,9 +4576,14 @@ function syncPullAll() {
       toast("已从云端同步 " + count + " 个材料");
     }
     // 刷新：让 loadMaterial 重新走（会用刚拉到的数据）
+    // 🛡️ 防覆盖：如果用户已经手动加载了某份材料（如从材料库点击），不要用 lastId 覆盖它
     var lastId = null;
     try { lastId = localStorage.getItem("shadowing:lastMaterialId"); } catch (_) {}
-    if (lastId) {
+    if (lastId && state.materialId && state.materialId !== lastId) {
+      console.log("[syncPullAll] 用户已加载", state.materialId, "，跳过自动恢复 lastId =", lastId);
+      loadVocab();
+      renderList();
+    } else if (lastId) {
       _idbGet(lastId).then(function (row) {
         if (row && row.material && row.material.sentences && row.material.sentences.length) {
           var ap = (row.material.meta && row.material.meta.audioPath) || null;
