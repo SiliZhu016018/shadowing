@@ -129,8 +129,8 @@
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
   .btn-ghost { border-color: transparent; background: transparent; color: var(--accent); box-shadow: none; font-weight: 500; }
   .btn-ghost:hover { background: var(--accent-soft); box-shadow: none; transform: none; }
-  /* 暂停/继续按钮：固定宽度避免文字切换抖动 */
-  #btn-toggle { min-width: 88px; font-weight: 600; background: var(--grad-accent); color: #fff; border-color: transparent; box-shadow: var(--shadow-glow); padding: 7px 15px; }
+  /* 整段播放的「暂停/继续」按钮：原生 <audio controls> 已能整段播/暂停，此按钮冗余，隐藏 */
+  #btn-toggle { display: none; min-width: 88px; font-weight: 600; background: var(--grad-accent); color: #fff; border-color: transparent; box-shadow: var(--shadow-glow); padding: 7px 15px; }
   #btn-toggle:hover { background: var(--grad-accent-hover); border-color: transparent; }
 
   .progress { margin: 12px 0 6px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
@@ -1984,6 +1984,7 @@
         try { _wa.src.start(0, offset, dur); } catch (e) { console.warn("[WA] resume start() 异常:", e); return; }
         _waStartProgressMonitor();
         _wa.src.onended = function () { _wa.src = null; _wa.playing = false; _waStopProgressMonitor(); };
+        syncPlayIcons();   // 恢复后让当前句图标翻回 ⏸（保证「播放/暂停图标一致」）
         console.log("[WA] 恢复于", offset.toFixed(3), "s");
       }
       if (_wa.ctx.state === "suspended") { var pr = _wa.ctx.resume(); if (pr && pr.then) pr.then(doStartFull).catch(doStartFull); else doStartFull(); }
@@ -2006,6 +2007,7 @@
         try { _wa.src.start(0, offInSlice, remInSlice); } catch (e) { console.warn("[WA] resume(slice) 异常:", e); return; }
         _waStartProgressMonitor();
         _wa.src.onended = function () { _wa.src = null; _wa.playing = false; _waStopProgressMonitor(); };
+        syncPlayIcons();   // 恢复后让当前句图标翻回 ⏸（切片模式同样保证一致性）
         console.log("[WA] 切片恢复于", resumeAt.toFixed(3), "s (within slice)");
       }
       if (_wa.ctx.state === "suspended") { var pr2 = _wa.ctx.resume(); if (pr2 && pr2.then) pr2.then(doStartSlice).catch(doStartSlice); else doStartSlice(); }
